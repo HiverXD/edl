@@ -656,6 +656,22 @@ mazes_dict['square_corridor2'] = {'maze': Maze(*segments_corridor, goal_squares=
                                   'action_range': 0.95}
 
 
+segments_spiral = [
+    dict(name='spiral0', anchor='origin', direction='down', times=4),
+    dict(name='spiral1', anchor='spiral03', direction='right', times=4),
+    dict(name='spiral2', anchor='spiral13', direction='up', times=3),
+    dict(name='spiral3', anchor='spiral22', direction='left', times=2),
+    dict(name='spiral4', anchor='spiral31', direction='down', times=1),
+    dict(name='spiral5', anchor='spiral4', direction='right', times=1),
+    dict(name='spiral6', anchor='spiral5', direction='down', times=1),
+    dict(name='spiral7', anchor='spiral6', direction='left', times=2),
+    dict(name='spiral8', anchor='spiral71', direction='up', times=3),
+    dict(name='spiral9', anchor='spiral82', direction='right', times=4),
+    dict(name='spiral10', anchor='spiral93', direction='down', times=4),
+]
+mazes_dict['spiral'] = {'maze': Maze(*segments_spiral, goal_squares=['spiral103']), 'action_range': 0.95}
+
+
 _walls_to_remove = [
     ((4.5, 4.5), (7.5, 8.5)),
     ((-0.5, 0.5), (5.5, 5.5)),
