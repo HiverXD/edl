@@ -1,3 +1,5 @@
 *.pyc
 *.idea
 *.DS_Store
+logs/square_maze
+logs/square_maze_old
