@@ -10,6 +10,7 @@ import torch
 import numpy as np
 import math
 import matplotlib.pyplot as plt
+import shutil
 from tqdm import tqdm, tqdm_notebook
 from dist_train.workers.utils import ReplayBuffer
 from .experiment import Experiment, EXPERIMENT_DIR
@@ -85,12 +86,14 @@ def play_interpolated_episode(agent, z_interpolated, do_eval=True, reset_dict={}
     agent.preprocess_skill = original_preprocess
 
 
-def _plot_all_skills(exp, cmap, ax=None, reset_dict=None, alpha=1., linewidth=1.):
+def _plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range=0.2, alpha=1., linewidth=1.):
     agent = exp.learner.agent
     agent.env.maze.plot(ax)
 
-    if reset_dict is None:
-        reset_dict = agent.env.sibling_reset  # fix s_0 across trajectories and skills
+    # Q1 Fix: Use a randomized starting state within a square
+    randomized_start_x = start_pos_base[0] + np.random.uniform(-random_range, random_range)
+    randomized_start_y = start_pos_base[1] + np.random.uniform(-random_range, random_range)
+    reset_dict = {'state': (randomized_start_x, randomized_start_y)}
 
     for skill_idx in range(agent.skill_n):
         # Collect rollout
@@ -102,7 +105,7 @@ def _plot_all_skills(exp, cmap, ax=None, reset_dict=None, alpha=1., linewidth=1.
     ax.plot(agent.rollout[0][0], agent.rollout[1][0], marker='o', markersize=8, color='black', zorder=11)
 
 
-def plot_all_skills(exp, cmap, ax=None, reset_dict=None, notebook_mode=True, desc=None, figsize=(5, 5), **kwargs):
+def plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range=0.2, notebook_mode=True, desc=None, figsize=(5, 5), **kwargs):
     desc = desc or "Trajectories"
     tqdm_ = tqdm_notebook if notebook_mode else tqdm
 
@@ -113,7 +116,8 @@ def plot_all_skills(exp, cmap, ax=None, reset_dict=None, notebook_mode=True, des
         return_ax = False
 
     for _ in tqdm_(range(NUM_TRAJECTORIES), desc=desc, disable=False, leave=True, total=NUM_TRAJECTORIES):
-        _plot_all_skills(exp, cmap, ax, reset_dict=reset_dict, **TRAJECTORY_KWARGS)
+        # Pass start_pos_base and random_range to _plot_all_skills
+        _plot_all_skills(exp, cmap, ax, start_pos_base=start_pos_base, random_range=random_range, **TRAJECTORY_KWARGS)
 
     config_subplot(ax, exp=exp, **kwargs)
 
@@ -276,7 +280,7 @@ def state_coverage(exp, cell_size, ax=None, notebook_mode=True, **kwargs):
     
     return ax
 
-def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_rollout_traj_each_mode, base_save_dir="zero_shot_logs"):
+def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_rollout_traj_each_mode, base_save_dir="zero_shot_logs", start_pos_base=(0.0, -0.5), random_range=0.2):
     """
     Performs rollouts for interpolated skills and saves trajectories in JSON format.
     """
@@ -287,9 +291,9 @@ def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_roll
     z1 = agent.skill_embedding(torch.tensor(skill_idx_1))
     z2 = agent.skill_embedding(torch.tensor(skill_idx_2))
 
-    # Create root save directory for this zero-shot experiment
-    # e.g., zero_shot_logs/square_maze/edl_sr_smm/zero_shot_of_0_6
+    # Q2 Fix: Clear previous logs for this experiment
     zero_shot_log_dir = os.path.join(base_save_dir, exp.name, "zero_shot_of_{}_{}".format(skill_idx_1, skill_idx_2))
+    shutil.rmtree(zero_shot_log_dir, ignore_errors=True)
     os.makedirs(zero_shot_log_dir, exist_ok=True)
     
     print("Saving zero-shot trajectories to: {}".format(zero_shot_log_dir))
@@ -311,7 +315,13 @@ def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_roll
         # Collect multiple trajectories for each interpolated skill
         for k in range(num_rollout_traj_each_mode):
             print("  Collecting trajectory {}/{} for skill {}/{} (t={:.2f})".format(k+1, num_rollout_traj_each_mode, i, num_interpolation + 1, t))
-            play_interpolated_episode(agent, z_inter, do_eval=True)
+            
+            # Q1 Fix: Use a randomized starting state for each trajectory
+            randomized_start_x = start_pos_base[0] + np.random.uniform(-random_range, random_range)
+            randomized_start_y = start_pos_base[1] + np.random.uniform(-random_range, random_range)
+            reset_dict = {'state': (randomized_start_x, randomized_start_y)}
+
+            play_interpolated_episode(agent, z_inter, do_eval=True, reset_dict=reset_dict)
 
             dump_ep = []
             for t_step in agent.episode:
@@ -336,7 +346,7 @@ def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_roll
 
 def visualize_zero_shot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=None, **kwargs):
     """
-    Visualizes trajectories of interpolated skills with interpolated colors.
+    Visualizes trajectories of interpolated skills with interpolated colors, with specific legend ordering.
     """
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(10, 10))
@@ -349,33 +359,34 @@ def visualize_zero_shot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=No
 
     # Infer num_interpolation from subdirectories
     subdirs = [d for d in os.listdir(zero_shot_log_path) if os.path.isdir(os.path.join(zero_shot_log_path, d))]
-    
     if not subdirs:
         print("No subdirectories found in {}.".format(zero_shot_log_path))
         return
 
-    # Parse directory names to determine the number of interpolation steps
     total_skills_to_plot = 0
     for d in subdirs:
         try:
             parts = d.split('-')
             if len(parts) == 2:
-                total_skills_to_plot = max(total_skills_to_plot, int(parts[1])+1)
+                total_skills_to_plot = max(total_skills_to_plot, int(parts[1]))
         except (ValueError, IndexError):
             continue
     
-    if total_skills_to_plot < 2:
+    # The number of interpolation steps is the total number of skills minus the two base skills.
+    # The total number of directories is num_interpolation + 2.
+    # The directory format is {i}-{total_dirs-1}, so total_skills_to_plot is actually the max index, which is num_interpolation+1
+    if total_skills_to_plot < 1:
         print("Could not determine interpolation steps from directory names.")
         return
+    num_interpolation = total_skills_to_plot - 1
 
-    num_interpolation = total_skills_to_plot - 2
 
     # Get base colors
     cmap = plt.get_cmap('tab10') if exp.learner.agent.skill_n <= 10 else plt.get_cmap('tab20')
     color_1_rgb = np.array(cmap(skill_idx_1))
     color_2_rgb = np.array(cmap(skill_idx_2))
 
-    # Iterate through each interpolated skill's trajectories
+    # --- Plotting Loop 1: Trajectories ---
     for i in range(num_interpolation + 2):
         sub_dir_name = "{}-{}".format(i, num_interpolation + 1)
         skill_log_path = os.path.join(zero_shot_log_path, sub_dir_name)
@@ -388,25 +399,40 @@ def visualize_zero_shot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=No
         with open(traj_file, 'r') as f:
             episodes_data = json.load(f)
 
-        # Calculate interpolated color
         t = i / (num_interpolation + 1)
         inter_color = (1 - t) * color_1_rgb + t * color_2_rgb
 
-        # Plot each trajectory
         for k_str, trajectory_data in episodes_data.items():
-            # trajectory_data is a list of dicts, each dict has 'state': [x, y]
             states_x = [step['state'][0] for step in trajectory_data]
             states_y = [step['state'][1] for step in trajectory_data]
-            
-            # Label only the first trajectory of each skill group
             label = "Skill {}/{} (t={:.2f})".format(i, num_interpolation + 1, t) if k_str == '0' else None
             ax.plot(states_x, states_y, color=inter_color, alpha=0.7, linewidth=2, label=label)
 
-    # Plot original centroids for reference
+    # --- Plotting Goals for Legend Order ---
     vae = exp.learner.vae
+    z1 = exp.learner.agent.skill_embedding(torch.tensor(skill_idx_1))
+    z2 = exp.learner.agent.skill_embedding(torch.tensor(skill_idx_2))
+
+    # Plot original centroid 1
     s1_star = vae.get_centroids(dict(skill=torch.tensor(skill_idx_1)))[0].detach().numpy()
-    s2_star = vae.get_centroids(dict(skill=torch.tensor(skill_idx_2)))[0].detach().numpy()
     ax.plot(s1_star[0], s1_star[1], 'X', markersize=15, color=color_1_rgb, label="Goal for Skill {}".format(skill_idx_1), zorder=12, markeredgecolor='black')
+
+    # Plot interpolated goals
+    for i in range(1, num_interpolation + 1):
+        t = i / (num_interpolation + 1)
+        inter_color = (1 - t) * color_1_rgb + t * color_2_rgb
+        z_inter = (1 - t) * z1 + t * z2
+        s_inter_star_normalized = vae.decoder(z_inter.unsqueeze(0)).squeeze(0)
+        if vae.normalizes_inputs:
+            s_inter_star = vae.normalizer.denormalize(s_inter_star_normalized).detach().numpy()
+        else:
+            s_inter_star = s_inter_star_normalized.detach().numpy()
+        label = "Goal for Skill (t={:.2f})".format(t)
+        ax.plot(s_inter_star[0], s_inter_star[1], 'o', markersize=10,
+                color=inter_color, label=label, zorder=11, markeredgecolor='black')
+
+    # Plot original centroid 2
+    s2_star = vae.get_centroids(dict(skill=torch.tensor(skill_idx_2)))[0].detach().numpy()
     ax.plot(s2_star[0], s2_star[1], 'X', markersize=15, color=color_2_rgb, label="Goal for Skill {}".format(skill_idx_2), zorder=12, markeredgecolor='black')
 
     ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1))
