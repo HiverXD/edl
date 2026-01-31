@@ -67,6 +67,24 @@ def play_episode(agent, skill, do_eval, reset_dict={}):
         agent.step(do_eval)
 
 
+def play_interpolated_episode(agent, z_interpolated, do_eval=True, reset_dict={}):
+    """
+    Plays an episode using an interpolated skill vector.
+    Temporarily overrides the agent's preprocess_skill to directly use the provided vector.
+    """
+    original_preprocess = agent.preprocess_skill
+    # Override preprocess_skill to just pass the vector through
+    # Ensure skill_vec is a tensor before detach()
+    agent.preprocess_skill = lambda skill_vec: skill_vec.detach() if isinstance(skill_vec, torch.Tensor) else skill_vec
+
+    agent.reset(skill=z_interpolated, **reset_dict)
+    while not agent.env.is_done:
+        agent.step(do_eval)
+
+    # Restore original method
+    agent.preprocess_skill = original_preprocess
+
+
 def _plot_all_skills(exp, cmap, ax=None, reset_dict=None, alpha=1., linewidth=1.):
     agent = exp.learner.agent
     agent.env.maze.plot(ax)
@@ -256,4 +274,140 @@ def state_coverage(exp, cell_size, ax=None, notebook_mode=True, **kwargs):
     cbar = fig.colorbar(im, ax=ax)
     cbar.set_label("Log(Visit Count + 1)")
     
+    return ax
+
+def rollout_zero_shot(exp, skill_idx_1, skill_idx_2, num_interpolation, num_rollout_traj_each_mode, base_save_dir="zero_shot_logs"):
+    """
+    Performs rollouts for interpolated skills and saves trajectories in JSON format.
+    """
+    agent = exp.learner.agent
+    vae = exp.learner.vae
+
+    # Get base skill vectors
+    z1 = agent.skill_embedding(torch.tensor(skill_idx_1))
+    z2 = agent.skill_embedding(torch.tensor(skill_idx_2))
+
+    # Create root save directory for this zero-shot experiment
+    # e.g., zero_shot_logs/square_maze/edl_sr_smm/zero_shot_of_0_6
+    zero_shot_log_dir = os.path.join(base_save_dir, exp.name, "zero_shot_of_{}_{}".format(skill_idx_1, skill_idx_2))
+    os.makedirs(zero_shot_log_dir, exist_ok=True)
+    
+    print("Saving zero-shot trajectories to: {}".format(zero_shot_log_dir))
+
+    # Iterate interpolation steps
+    for i in range(num_interpolation + 2):
+        # Calculate interpolation weight t
+        t = float(i) / (num_interpolation + 1)
+        
+        # Calculate interpolated skill vector z_inter
+        z_inter = (1 - t) * z1 + t * z2
+
+        # Create subdirectory for this interpolated skill
+        sub_dir_name = "{}-{}".format(i, num_interpolation + 1)
+        skill_save_path = os.path.join(zero_shot_log_dir, sub_dir_name)
+        os.makedirs(skill_save_path, exist_ok=True)
+
+        episodes_data = {}
+        # Collect multiple trajectories for each interpolated skill
+        for k in range(num_rollout_traj_each_mode):
+            print("  Collecting trajectory {}/{} for skill {}/{} (t={:.2f})".format(k+1, num_rollout_traj_each_mode, i, num_interpolation + 1, t))
+            play_interpolated_episode(agent, z_inter, do_eval=True)
+
+            dump_ep = []
+            for t_step in agent.episode:
+                dump_t = {}
+                for key, val in t_step.items():
+                    # Convert tensors/numpy arrays to lists for JSON serialization
+                    if isinstance(val, torch.Tensor):
+                        dump_t[key] = val.detach().numpy().tolist()
+                    elif isinstance(val, np.ndarray):
+                        dump_t[key] = val.tolist()
+                    else:
+                        dump_t[key] = val
+                dump_ep.append(dump_t)
+            episodes_data[str(k)] = dump_ep
+
+        # Save trajectories to JSON
+        with open(os.path.join(skill_save_path, "trajectories.json"), 'wt') as f:
+            json.dump(episodes_data, f, indent=2)
+    
+    print("Zero-shot rollouts completed and saved.")
+
+
+def visualize_zero_shot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=None, **kwargs):
+    """
+    Visualizes trajectories of interpolated skills with interpolated colors.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(10, 10))
+    else:
+        fig = ax.get_figure()
+
+    # Setup plot with maze
+    config_subplot(ax, exp=exp, **kwargs)
+    exp.learner.agent.env.maze.plot(ax)
+
+    # Infer num_interpolation from subdirectories
+    subdirs = [d for d in os.listdir(zero_shot_log_path) if os.path.isdir(os.path.join(zero_shot_log_path, d))]
+    
+    if not subdirs:
+        print("No subdirectories found in {}.".format(zero_shot_log_path))
+        return
+
+    # Parse directory names to determine the number of interpolation steps
+    total_skills_to_plot = 0
+    for d in subdirs:
+        try:
+            parts = d.split('-')
+            if len(parts) == 2:
+                total_skills_to_plot = max(total_skills_to_plot, int(parts[1])+1)
+        except (ValueError, IndexError):
+            continue
+    
+    if total_skills_to_plot < 2:
+        print("Could not determine interpolation steps from directory names.")
+        return
+
+    num_interpolation = total_skills_to_plot - 2
+
+    # Get base colors
+    cmap = plt.get_cmap('tab10') if exp.learner.agent.skill_n <= 10 else plt.get_cmap('tab20')
+    color_1_rgb = np.array(cmap(skill_idx_1))
+    color_2_rgb = np.array(cmap(skill_idx_2))
+
+    # Iterate through each interpolated skill's trajectories
+    for i in range(num_interpolation + 2):
+        sub_dir_name = "{}-{}".format(i, num_interpolation + 1)
+        skill_log_path = os.path.join(zero_shot_log_path, sub_dir_name)
+        
+        traj_file = os.path.join(skill_log_path, "trajectories.json")
+        if not os.path.exists(traj_file):
+            print("Warning: trajectories.json not found in {}. Skipping.".format(skill_log_path))
+            continue
+
+        with open(traj_file, 'r') as f:
+            episodes_data = json.load(f)
+
+        # Calculate interpolated color
+        t = i / (num_interpolation + 1)
+        inter_color = (1 - t) * color_1_rgb + t * color_2_rgb
+
+        # Plot each trajectory
+        for k_str, trajectory_data in episodes_data.items():
+            # trajectory_data is a list of dicts, each dict has 'state': [x, y]
+            states_x = [step['state'][0] for step in trajectory_data]
+            states_y = [step['state'][1] for step in trajectory_data]
+            
+            # Label only the first trajectory of each skill group
+            label = "Skill {}/{} (t={:.2f})".format(i, num_interpolation + 1, t) if k_str == '0' else None
+            ax.plot(states_x, states_y, color=inter_color, alpha=0.7, linewidth=2, label=label)
+
+    # Plot original centroids for reference
+    vae = exp.learner.vae
+    s1_star = vae.get_centroids(dict(skill=torch.tensor(skill_idx_1)))[0].detach().numpy()
+    s2_star = vae.get_centroids(dict(skill=torch.tensor(skill_idx_2)))[0].detach().numpy()
+    ax.plot(s1_star[0], s1_star[1], 'X', markersize=15, color=color_1_rgb, label="Goal for Skill {}".format(skill_idx_1), zorder=12, markeredgecolor='black')
+    ax.plot(s2_star[0], s2_star[1], 'X', markersize=15, color=color_2_rgb, label="Goal for Skill {}".format(skill_idx_2), zorder=12, markeredgecolor='black')
+
+    ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1))
     return ax

@@ -2,4 +2,4 @@
 *.idea
 *.DS_Store
 logs/square_maze
-logs/square_maze_old
+notebooks/logs_zero_shot/square_maze

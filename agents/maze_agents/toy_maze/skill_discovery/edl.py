@@ -30,7 +30,15 @@ class DistanceStochasticAgent(StochasticAgent):
 
     def reset(self, skill=None, *args, **kwargs):
         self.reset_skill(skill)
-        kwargs['goal'] = self.vae.get_centroids(dict(skill=self.curr_skill.view([]))).detach().numpy()
+        # If the skill is a continuous vector (interpolated), pass it directly to the decoder.
+        # Otherwise, treat it as a discrete skill index.
+        if self.curr_skill.dim() > 0 and self.curr_skill.numel() > 1:
+            # It's an interpolated vector, feed it directly to the decoder
+            goal_state = self.vae.decoder(self.curr_skill.unsqueeze(0)).squeeze(0).detach().numpy()
+        else:
+            # It's a scalar index, use the existing logic
+            goal_state = self.vae.get_centroids(dict(skill=self.curr_skill.view([]))).detach().numpy()
+        kwargs['goal'] = goal_state
         self.env.reset(*args, **kwargs)
         self.episode = []
 
