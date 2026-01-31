@@ -7,6 +7,8 @@
 import os
 import json
 import torch
+import numpy as np
+import math
 import matplotlib.pyplot as plt
 from tqdm import tqdm, tqdm_notebook
 from dist_train.workers.utils import ReplayBuffer
@@ -157,3 +159,101 @@ def load_vqvae(exp_name, verbose=False):
     loss = json.loads(json.load(open(os.path.join(exp_dir, "loss.json"))))
 
     return model, config, loss
+
+
+def state_coverage(exp, cell_size, ax=None, notebook_mode=True, **kwargs):
+    """
+    Computes and visualizes the state coverage of an agent's learned skills.
+    - Divides the maze into a grid of cell_size.
+    - Runs the agent for all skills to collect trajectories.
+    - Counts how many times any part of a trajectory falls into each grid cell.
+    - Plots a heatmap of the visit counts.
+    - Prints the quantitative state coverage percentage.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+
+    agent = exp.learner.agent
+    env = agent.env
+
+    # 1. Get Maze Boundaries and Create Grid
+    try:
+        env_lims = ENV_LIMS[env.maze_type]
+        min_x, max_x = env_lims['x']
+        min_y, max_y = env_lims['y']
+    except KeyError:
+        print("Warning: Maze type '{}' not in ENV_LIMS. Using default limits.".format(env.maze_type))
+        min_x, max_x, min_y, max_y = -5.5, 5.5, -5.5, 0.5
+
+    n_cells_x = math.ceil((max_x - min_x) / cell_size)
+    n_cells_y = math.ceil((max_y - min_y) / cell_size)
+    visit_counts = np.zeros((n_cells_y, n_cells_x))
+
+    # 2. Collect Trajectories and Populate Visit Counts
+    num_trajectories_per_skill = 5  # Collect a few trajectories for each skill for robustness
+    all_trajectories = []
+
+    for skill_idx in range(agent.skill_n):
+        for _ in range(num_trajectories_per_skill):
+            play_episode(agent, skill_idx, do_eval=True)
+            # agent.rollout is a tuple of (x_coords, y_coords)
+            trajectory_states = np.stack(agent.rollout, axis=-1)
+            all_trajectories.append(trajectory_states)
+
+    tqdm_ = tqdm_notebook if notebook_mode else tqdm
+    for trajectory in tqdm_(all_trajectories):
+        for state in trajectory:
+            # Convert state (x, y) to grid indices (i, j)
+            x, y = state[0], state[1]
+            j = int((x - min_x) / cell_size)
+            i = int((y - min_y) / cell_size)
+
+            # Ensure indices are within bounds
+            if 0 <= i < n_cells_y and 0 <= j < n_cells_x:
+                visit_counts[i, j] += 1
+
+    # 3. Calculate and Print Quantitative Metrics
+    # For total_valid_cells, we approximate by checking if the center of each cell is valid
+    total_valid_cells = 0
+    epsilon = 1e-4 # Small epsilon for wall checking
+    for i in range(n_cells_y):
+        for j in range(n_cells_x):
+            cell_center_y = min_y + (i + 0.5) * cell_size
+            cell_center_x = min_x + (j + 0.5) * cell_size
+            start_coord = (cell_center_x, cell_center_y)
+            delta = (epsilon, 0.0) # Try moving right by a tiny amou
+            moved_coord_x, moved_coord_y = env.maze.move(start_coord, delta)
+            # If the agent moved as expected (not blocked by a wall) count it as a valid cell
+            # Using atol for floating point comparison tolerance
+            if np.isclose(moved_coord_x, start_coord[0] + delta[0], atol=1e-6) and np.isclose(moved_coord_y, start_coord[1] + delta[1], atol=1e-6):
+                total_valid_cells += 1
+
+    
+    visited_cells = np.count_nonzero(visit_counts)
+    if total_valid_cells > 0:
+        coverage_percent = (visited_cells / total_valid_cells) * 100
+    else:
+        coverage_percent = 0.0
+
+    print("Grid Size: {}x{}".format(n_cells_x, n_cells_y))
+    print("Visited Cells: {} in {}".format(visited_cells, total_valid_cells))
+    print("State Coverage: {:.2f}%".format(coverage_percent))
+
+
+    # 4. Visualize Heatmap
+    config_subplot(ax, exp=exp, **kwargs)
+    env.maze.plot(ax)
+
+    # Use a log scale for better visualization of low-count cells, adding 1 to avoid log(0)
+    log_counts = np.log1p(visit_counts)
+
+    im = ax.imshow(log_counts, origin='lower',
+                   extent=[min_x, max_x, min_y, max_y],
+                   aspect='auto', alpha=0.7, cmap='viridis')
+    
+    # Add a color bar
+    fig = ax.get_figure()
+    cbar = fig.colorbar(im, ax=ax)
+    cbar.set_label("Log(Visit Count + 1)")
+    
+    return ax
