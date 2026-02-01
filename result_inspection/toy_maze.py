@@ -437,3 +437,130 @@ def visualize_zero_shot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=No
 
     ax.legend(loc='upper right', bbox_to_anchor=(1.3, 1))
     return ax
+
+
+def calculate_skill_L2_error(exp, skill_log_path, skill_latent_vector_z):
+    """
+    Calculates the L2 distance between the intended goal of a skill and the actual final positions from rollout trajectories.
+
+    Args:
+        exp (Experiment): The experiment object, containing the VAE model.
+        skill_log_path (str): Path to the directory for a specific skill, containing trajectories.json.
+        skill_latent_vector_z (torch.Tensor): The latent vector z for this skill.
+
+    Returns:
+        np.ndarray: An array of L2 distances for each trajectory.
+    """
+    vae = exp.learner.vae
+    distances = []
+
+    # 1. Calculate the intended goal state s_star by decoding the latent vector
+    s_star_normalized = vae.decoder(skill_latent_vector_z.unsqueeze(0)).squeeze(0)
+    if vae.normalizes_inputs:
+        s_star = vae.normalizer.denormalize(s_star_normalized).detach().numpy()
+    else:
+        s_star = s_star_normalized.detach().numpy()
+
+    # 2. Load the trajectory data
+    traj_file = os.path.join(skill_log_path, "trajectories.json")
+    if not os.path.exists(traj_file):
+        print("Warning: trajectories.json not found in {}. Skipping.".format(skill_log_path))
+        return np.array([])
+
+    with open(traj_file, 'r') as f:
+        episodes_data = json.load(f)
+
+    # 3. For each trajectory, find the final state and calculate the L2 distance
+    for k_str, trajectory_data in episodes_data.items():
+        if not trajectory_data:
+            continue
+        # The last state is the final position
+        s_final = np.array(trajectory_data[-1]['state'])
+        dist = np.linalg.norm(s_star - s_final)
+        distances.append(dist)
+
+    return np.array(distances)
+
+
+def visualize_traj_L2_error_bar_plot(zero_shot_log_path, exp, skill_idx_1, skill_idx_2, ax=None, **kwargs):
+    """
+    Creates a bar plot showing the mean L2 distance error for original and interpolated skills.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    # --- 1. Initial Setup (similar to visualize_zero_shot) ---
+    subdirs = [d for d in os.listdir(zero_shot_log_path) if os.path.isdir(os.path.join(zero_shot_log_path, d))]
+    if not subdirs:
+        print("No subdirectories found in {}.".format(zero_shot_log_path))
+        return
+
+    total_skills_to_plot = 0
+    for d in subdirs:
+        try:
+            parts = d.split('-')
+            if len(parts) == 2:
+                total_skills_to_plot = max(total_skills_to_plot, int(parts[1]))
+        except (ValueError, IndexError):
+            continue
+
+    if total_skills_to_plot < 1:
+        print("Could not determine interpolation steps from directory names.")
+        return
+    num_interpolation = total_skills_to_plot - 1
+
+    cmap = plt.get_cmap('tab10') if exp.learner.agent.skill_n <= 10 else plt.get_cmap('tab20')
+    color_1_rgb = np.array(cmap(skill_idx_1))
+    color_2_rgb = np.array(cmap(skill_idx_2))
+
+    z1 = exp.learner.agent.skill_embedding(torch.tensor(skill_idx_1))
+    z2 = exp.learner.agent.skill_embedding(torch.tensor(skill_idx_2))
+    
+    # --- 2. Data Collection Loop ---
+    mean_errors = []
+    std_errors = []
+    bar_colors = []
+    tick_labels = []
+
+    for i in range(num_interpolation + 2):
+        t = i / (num_interpolation + 1)
+        
+        # Get log path and latent vector for the current skill
+        sub_dir_name = "{}-{}".format(i, num_interpolation + 1)
+        skill_log_path = os.path.join(zero_shot_log_path, sub_dir_name)
+        z_inter = (1 - t) * z1 + t * z2
+
+        # Calculate L2 errors for this skill
+        distances = calculate_skill_L2_error(exp, skill_log_path, z_inter)
+
+        if distances.size > 0:
+            mean_errors.append(np.mean(distances))
+            std_errors.append(np.std(distances))
+        else:
+            mean_errors.append(0)
+            std_errors.append(0)
+
+        # Get color and label
+        inter_color = (1 - t) * color_1_rgb + t * color_2_rgb
+        bar_colors.append(inter_color)
+        
+        if i == 0:
+            tick_labels.append("Skill"+str(skill_idx_1))
+        elif i == num_interpolation + 1:
+            tick_labels.append("Skill"+str(skill_idx_2))
+        else:
+            tick_labels.append("t={:.2f}".format(t))
+
+    # --- 3. Plotting ---
+    x_pos = np.arange(len(tick_labels))
+    ax.bar(x_pos, mean_errors, yerr=std_errors, color=bar_colors, capsize=5, alpha=0.8)
+
+    ax.set_xticks(x_pos)
+    ax.set_xticklabels(tick_labels, rotation=45, ha="right")
+    ax.set_ylabel("Mean L2 Distance to Goal")
+    ax.set_title("Skill Trajectory L2 Error")
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.yaxis.grid(True, linestyle='--', alpha=0.6)
+    
+    return ax
