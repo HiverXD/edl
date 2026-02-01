@@ -86,18 +86,21 @@ def play_interpolated_episode(agent, z_interpolated, do_eval=True, reset_dict={}
     agent.preprocess_skill = original_preprocess
 
 
-def _plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range=0.2, alpha=1., linewidth=1.):
+def _plot_all_skills(exp, cmap, ax=None, reset_dict=None, start_pos_base=(0.0, 0.0), random_range=0.2, alpha=1., linewidth=1.):
     agent = exp.learner.agent
     agent.env.maze.plot(ax)
 
-    # Q1 Fix: Use a randomized starting state within a square
-    randomized_start_x = start_pos_base[0] + np.random.uniform(-random_range, random_range)
-    randomized_start_y = start_pos_base[1] + np.random.uniform(-random_range, random_range)
-    reset_dict = {'state': (randomized_start_x, randomized_start_y)}
+    # If a specific reset_dict is provided, use it. Otherwise, randomize.
+    final_reset_dict = reset_dict
+    if final_reset_dict is None:
+        # Use a randomized starting state within a square if no specific start is given
+        randomized_start_x = start_pos_base[0] + np.random.uniform(-random_range, random_range)
+        randomized_start_y = start_pos_base[1] + np.random.uniform(-random_range, random_range)
+        final_reset_dict = {'state': (randomized_start_x, randomized_start_y)}
 
     for skill_idx in range(agent.skill_n):
         # Collect rollout
-        play_episode(agent, skill_idx, do_eval=False, reset_dict=reset_dict)
+        play_episode(agent, skill_idx, do_eval=False, reset_dict=final_reset_dict)
         # Plot trajectory
         ax.plot(*agent.rollout, label="Skill #{}".format(skill_idx), color=cmap(skill_idx), alpha=alpha,
                 linewidth=linewidth, zorder=10)
@@ -105,7 +108,7 @@ def _plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range
     ax.plot(agent.rollout[0][0], agent.rollout[1][0], marker='o', markersize=8, color='black', zorder=11)
 
 
-def plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range=0.2, notebook_mode=True, desc=None, figsize=(5, 5), **kwargs):
+def plot_all_skills(exp, cmap, ax=None, reset_dict=None, start_pos_base=(0.0, 0.0), random_range=0.2, notebook_mode=True, desc=None, figsize=(5, 5), **kwargs):
     desc = desc or "Trajectories"
     tqdm_ = tqdm_notebook if notebook_mode else tqdm
 
@@ -116,8 +119,8 @@ def plot_all_skills(exp, cmap, ax=None, start_pos_base=(0.0, 0.0), random_range=
         return_ax = False
 
     for _ in tqdm_(range(NUM_TRAJECTORIES), desc=desc, disable=False, leave=True, total=NUM_TRAJECTORIES):
-        # Pass start_pos_base and random_range to _plot_all_skills
-        _plot_all_skills(exp, cmap, ax, start_pos_base=start_pos_base, random_range=random_range, **TRAJECTORY_KWARGS)
+        # Pass all relevant parameters to _plot_all_skills
+        _plot_all_skills(exp, cmap, ax, reset_dict=reset_dict, start_pos_base=start_pos_base, random_range=random_range, **TRAJECTORY_KWARGS)
 
     config_subplot(ax, exp=exp, **kwargs)
 
@@ -235,19 +238,15 @@ def state_coverage(exp, cell_size, ax=None, notebook_mode=True, **kwargs):
                 visit_counts[i, j] += 1
 
     # 3. Calculate and Print Quantitative Metrics
-    # For total_valid_cells, we approximate by checking if the center of each cell is valid
+    # For total_valid_cells, check if the center of each cell is valid using the direct wall check
     total_valid_cells = 0
-    epsilon = 1e-4 # Small epsilon for wall checking
     for i in range(n_cells_y):
         for j in range(n_cells_x):
             cell_center_y = min_y + (i + 0.5) * cell_size
             cell_center_x = min_x + (j + 0.5) * cell_size
-            start_coord = (cell_center_x, cell_center_y)
-            delta = (epsilon, 0.0) # Try moving right by a tiny amou
-            moved_coord_x, moved_coord_y = env.maze.move(start_coord, delta)
-            # If the agent moved as expected (not blocked by a wall) count it as a valid cell
-            # Using atol for floating point comparison tolerance
-            if np.isclose(moved_coord_x, start_coord[0] + delta[0], atol=1e-6) and np.isclose(moved_coord_y, start_coord[1] + delta[1], atol=1e-6):
+            cell_center_coord = (cell_center_x, cell_center_y)
+
+            if not env.maze.is_inside_wall(cell_center_coord):
                 total_valid_cells += 1
 
     
