@@ -255,6 +255,34 @@ class Maze:
                 assert gs in self._segments
                 self.goal_squares.append(gs)
 
+    def is_inside_wall(self, coord, wall_thickness=0.01):
+        """
+        Checks if a given coordinate is within any wall segment.
+        Args:
+            coord (tuple): (x, y) coordinate to check.
+            wall_thickness (float): How thick to consider the line walls for collision.
+        Returns:
+            bool: True if inside a wall, False otherwise.
+        """
+        cx, cy = coord
+        for wall in self._walls:
+            ((wx1, wx2), (wy1, wy2)) = wall # w is tuple([tuple(sorted(line)) for line in w])
+            
+            # Since walls are lines (either vertical x1=x2 or horizontal y1=y2),
+            # we check if the point is close to the line and within its extent.
+            # Note that wx1 <= wx2 and wy1 <= wy2 because of sorted(line)
+            
+            # Horizontal wall (y is constant: wy1=wy2)
+            if abs(wy1 - wy2) < 1e-6: # Check if it's a horizontal line (y coords are effectively the same)
+                if abs(cy - wy1) < wall_thickness and wx1 - wall_thickness <= cx <= wx2 + wall_thickness:
+                    return True
+            # Vertical wall (x is constant: wx1=wx2)
+            elif abs(wx1 - wx2) < 1e-6: # Check if it's a vertical line (x coords are effectively the same)
+                if abs(cx - wx1) < wall_thickness and wy1 - wall_thickness <= cy <= wy2 + wall_thickness:
+                    return True
+        return False
+
+
     def plot(self, ax=None):
         if ax is None:
             _, ax = plt.subplots(1, 1, figsize=(5, 4))
