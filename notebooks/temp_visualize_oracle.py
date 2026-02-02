@@ -18,7 +18,7 @@ except ImportError as e:
 
 def visualize_oracle_samples():
     print("Loading oracle data...")
-    data_path = "../data/oracle_transitions/square_a/transitions.pkl"
+    data_path = "../data/oracle_transitions/spiral/transitions.pkl"
     
     if not os.path.exists(data_path):
         print("Data file not found.")
@@ -31,12 +31,12 @@ def visualize_oracle_samples():
     print("Loaded {} transitions.".format(len(transitions)))
     
     # Create environment for plotting
-    env = Env(n=1, maze_type='square_a', use_antigoal=False)
+    env = Env(n=1, maze_type='spiral', use_antigoal=False)
     
     # Plot 1: All transitions as scatter points (start positions)
     fig, ax = plt.subplots(figsize=(10, 10))
     env.maze.plot(ax)
-    config_subplot(ax, maze_type='square_a')
+    config_subplot(ax, maze_type='spiral')
     
     # Extract start positions
     starts = np.array([t[0] for t in transitions])
@@ -60,7 +60,7 @@ def visualize_oracle_samples():
     # Plot 2: Transitions as lines (Vector field)
     fig, ax = plt.subplots(figsize=(12, 12))
     env.maze.plot(ax)
-    config_subplot(ax, maze_type='square_a')
+    config_subplot(ax, maze_type='spiral')
     
     # Subsample if too many
     if len(transitions) > 5000:
