@@ -6,6 +6,7 @@
 import os
 import json
 import torch
+import torch.nn as nn
 import numpy as np
 import math
 import matplotlib.pyplot as plt
@@ -67,12 +68,20 @@ class GeodesicDistanceCalculator:
         nodes = []
         coord_to_node = {}
         node_to_coord = []
-        
+        epsilon = 1e-4
+
         # Create nodes for all valid grid points
         node_idx = 0
         for i, y in enumerate(y_coords):
             for j, x in enumerate(x_coords):
-                if not self.maze.is_inside_wall((x, y)):
+                # Check if the point is valid (not a wall) by attempting a tiny move
+                start_coord = (x, y)
+                delta = (epsilon, 0.0)
+                moved_pos = self.maze.move(start_coord, delta)
+                expected_pos = (start_coord[0] + delta[0], start_coord[1] + delta[1])
+                is_valid_pos = np.allclose(moved_pos, expected_pos, atol=1e-6)
+
+                if is_valid_pos:
                     grid_pos = (j, i)
                     nodes.append(grid_pos)
                     coord_to_node[grid_pos] = node_idx
@@ -223,27 +232,56 @@ def calculate_latent_distance(exp, s1, s2):
     
     return distance
 
+class LaplacianEncoderWrapper(nn.Module):
+    def __init__(self, model_path):
+        super(LaplacianEncoderWrapper, self).__init__()
+        checkpoint = torch.load(model_path, map_location='cpu')
+        state_dict = checkpoint['state_dict']
+        args = checkpoint['args']
+        self.mean = torch.from_numpy(checkpoint['mean']).float()
+        self.std = torch.from_numpy(checkpoint['std']).float()
+        
+        # Reconstruct architecture
+        from geometry_aware_skill_discovery.train_laplacian_encoder import LaplacianEncoder
+        self.encoder = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim)
+        self.encoder.load_state_dict(state_dict)
+        self.encoder.eval()
+        
+    def forward(self, x):
+        # Apply normalization
+        x_norm = (x - self.mean) / self.std
+        return self.encoder(x_norm)
 
-def visualize_geodesic_distance_correlation(exp, ax=None, num_samples=100, grid_resolution=0.2):
+def load_laplacian_encoder(maze_type, experiment_name="default"):
+    root_dir = os.environ.get("ROOT_DIR", ".")
+    model_path = os.path.join(root_dir, "logs/laplacian_encoder", maze_type, experiment_name, "model.pth.tar")
+    if not os.path.exists(model_path):
+        raise FileNotFoundError("Model not found at {}".format(model_path))
+    return LaplacianEncoderWrapper(model_path)
+
+def visualize_geodesic_distance_correlation(exp, encoder=None, ax=None, num_samples=100, grid_resolution=0.2, title_suffix=""):
     """
     Calculates and visualizes the correlation between geodesic distance in state space
-    and L2 distance in the latent space.
-
-    Args:
-        exp (Experiment): The experiment object.
-        ax (matplotlib.axes.Axes, optional): The axes to plot on.
-        num_samples (int): The number of random states to sample for the analysis.
-        grid_resolution (float): The resolution for discretizing the maze.
+    and distance in a latent space (VAE or Laplacian).
     """
     if ax is None:
         fig, ax = plt.subplots(1, 1, figsize=(8, 8))
 
-    # 1. Get VAE and Environment
-    vae = exp.learner.vae
+    # 1. Get Encoder and Environment
+    # If encoder is not provided, use the VAE encoder from the experiment
+    if encoder is None:
+        raw_encoder = exp.learner.vae.encoder
+        # Simple wrapper for VAE encoder to handle potential normalization if needed
+        # (Though EDL VAE usually handles it internally or doesn't use it the same way)
+        def encode_fn(x):
+            return raw_encoder(x)
+    else:
+        encode_fn = encoder
+
     env = exp.learner.agent.env
 
     # 2. Build/Load Maze Graph and All-Pairs Distances
-    print("Initializing Geodesic Calculator (builds graph and runs all-pairs shortest path)...")
+    print("Initializing Geodesic Calculator...")
     geo_calc = GeodesicDistanceCalculator(env.maze, maze_type=env.maze_type, resolution=grid_resolution)
     geodesic_dist_matrix = geo_calc.dist_matrix
 
@@ -253,7 +291,7 @@ def visualize_geodesic_distance_correlation(exp, ax=None, num_samples=100, grid_
     state_tensors = torch.tensor(states, dtype=torch.float32)
     
     with torch.no_grad():
-        latent_vectors = vae.encoder(state_tensors)
+        latent_vectors = encode_fn(state_tensors)
 
     # Find corresponding node indices for sampled states
     node_indices = []
@@ -266,7 +304,7 @@ def visualize_geodesic_distance_correlation(exp, ax=None, num_samples=100, grid_
             valid_states.append(state)
             valid_latents.append(latent_vectors[i])
 
-    print("Found "+str(len(valid_states))+ "states corresponding to graph nodes.")
+    print("Found {} states corresponding to graph nodes.".format(len(valid_states)))
     if len(valid_states) < 2:
         print("Not enough valid states to compute correlation.")
         return
@@ -303,12 +341,14 @@ def visualize_geodesic_distance_correlation(exp, ax=None, num_samples=100, grid_
     corr = np.corrcoef(d_lat_norm, d_geo_norm)[0, 1]
 
     # 7. Plotting
-    # ax.plot([0, 1], [0, 1], 'r--', label='Perfect Correlation (y=x)', zorder=2)
     ax.scatter(d_lat_norm, d_geo_norm, alpha=0.3, edgecolors='none', label='Distance Pairs', zorder=1)
+    # Perfect correlation line
+    ax.plot([0, 1], [0, 1], 'r--', label='y=x (Ideal)', zorder=2)
     
     ax.set_xlabel("Normalized Latent Distance")
     ax.set_ylabel("Normalized Geodesic Distance")
-    ax.set_title("Geodesic vs. Latent Distance Correlation ({})".format(exp.name))
+    title = "Geodesic vs. Latent Distance Correlation {}".format(title_suffix)
+    ax.set_title(title)
     ax.text(0.05, 0.95, "Pearson Correlation: {:.3f}".format(corr), transform=ax.transAxes,
             fontsize=12, verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
 
@@ -316,5 +356,83 @@ def visualize_geodesic_distance_correlation(exp, ax=None, num_samples=100, grid_
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.legend()
+    
+    return ax
+
+def visualize_distance_heatmap(exp, metric_fn, s0=(0.0, 0.0), ax=None, resolution=0.1, title="Distance Heatmap"):
+    """
+    Visualizes the distance from a reference state s0 to all other states in the maze
+    using a provided metric function.
+
+    Args:
+        exp (Experiment): The experiment object.
+        metric_fn (callable): Function f(states, s0) -> distances. 
+                              states is (N, 2) numpy array/tensor, s0 is (2,) tuple/tensor.
+                              Should return (N,) array of distances.
+        s0 (tuple): The reference (source) state coordinates (x, y).
+        ax (matplotlib.axes.Axes, optional): The axes to plot on.
+        resolution (float): Grid resolution for the heatmap.
+        title (str): Title of the plot.
+    """
+    if ax is None:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 8))
+
+    env = exp.learner.agent.env
+    
+    # 1. Setup Grid
+    try:
+        env_lims = ENV_LIMS[env.maze_type]
+        min_x, max_x = env_lims['x']
+        min_y, max_y = env_lims['y']
+    except KeyError:
+        min_x, max_x, min_y, max_y = -5.5, 5.5, -5.5, 0.5
+
+    x_coords = np.arange(min_x, max_x, resolution)
+    y_coords = np.arange(min_y, max_y, resolution)
+    X, Y = np.meshgrid(x_coords, y_coords)
+    
+    # Flatten for validity check and metric calculation
+    flat_X = X.flatten()
+    flat_Y = Y.flatten()
+    grid_points = np.stack([flat_X, flat_Y], axis=1) # (N, 2)
+
+    # 2. Check Validity (Wall Mask)
+    valid_mask = np.array([not env.maze.is_inside_wall((p[0], p[1])) for p in grid_points])
+    
+    # 3. Compute Distances using metric_fn
+    # Filter valid points to pass to metric_fn (to avoid potential errors with invalid states)
+    valid_points = grid_points[valid_mask]
+    
+    # Convert s0 to appropriate format if needed inside metric_fn, but here passing as tuple/array
+    # metric_fn is expected to handle batch computation or iteration
+    if len(valid_points) > 0:
+        dists = metric_fn(valid_points, s0)
+    else:
+        dists = np.array([])
+
+    # 4. Reconstruct Heatmap
+    heatmap_data = np.full(X.shape, np.nan) # Fill with NaNs
+    
+    # We need to map back valid_points indices to original grid indices
+    # Since we flattened and masked, we can just fill in order if we iterate or use indices
+    # It's easier to use the mask directly on the flattened array
+    flat_dists = np.full(flat_X.shape, np.nan)
+    flat_dists[valid_mask] = dists
+    heatmap_data = flat_dists.reshape(X.shape)
+
+    # 5. Plot
+    config_subplot(ax, exp=exp)
+    env.maze.plot(ax)
+    
+    # Plot heatmap
+    # Use 'viridis' or 'plasma' for distances. 'inf' or NaN will be transparent/white usually.
+    mesh = ax.pcolormesh(X, Y, heatmap_data, cmap='viridis', shading='auto', alpha=0.8)
+    
+    # Mark s0
+    ax.plot(s0[0], s0[1], 'r*', markersize=15, markeredgecolor='black', label='s0', zorder=10)
+    
+    ax.set_title(title)
+    # Add colorbar
+    plt.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04)
     
     return ax
