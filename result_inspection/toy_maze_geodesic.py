@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from functools import lru_cache
 from scipy.sparse import csr_matrix
-from scipy.sparse.csgraph import dijkstra
+from scipy.sparse.csgraph import dijkstra, connected_components
 
 from .experiment import Experiment
 from .toy_maze import config_subplot, ENV_LIMS
@@ -61,52 +61,46 @@ class GeodesicDistanceCalculator:
         """
         Builds a graph representation of the maze.
         Nodes are points on a grid, and edges connect valid neighbors.
+        Filters out isolated components (e.g., inside walls) to keep only the main maze.
         """
         x_coords = np.arange(self.min_x, self.max_x, self.resolution)
         y_coords = np.arange(self.min_y, self.max_y, self.resolution)
         
-        nodes = []
-        coord_to_node = {}
-        node_to_coord = []
+        temp_nodes = []
+        temp_coord_to_node = {}
+        temp_node_to_coord = []
         epsilon = 1e-4
 
-        # Create nodes for all valid grid points
+        # 1. Create initial nodes for all valid grid points
         node_idx = 0
         for i, y in enumerate(y_coords):
             for j, x in enumerate(x_coords):
-                # Check if the point is valid (not a wall) by attempting a tiny move
-                start_coord = (x, y)
-                delta = (epsilon, 0.0)
-                moved_pos = self.maze.move(start_coord, delta)
-                expected_pos = (start_coord[0] + delta[0], start_coord[1] + delta[1])
-                is_valid_pos = np.allclose(moved_pos, expected_pos, atol=1e-6)
-
-                if is_valid_pos:
+                if not self.maze.is_inside_wall((x, y)):
                     grid_pos = (j, i)
-                    nodes.append(grid_pos)
-                    coord_to_node[grid_pos] = node_idx
-                    node_to_coord.append((x, y))
+                    temp_nodes.append(grid_pos)
+                    temp_coord_to_node[grid_pos] = node_idx
+                    temp_node_to_coord.append((x, y))
                     node_idx += 1
         
-        num_nodes = len(nodes)
-        adj_matrix = np.zeros((num_nodes, num_nodes))
+        num_temp_nodes = len(temp_nodes)
+        temp_adj_matrix = np.zeros((num_temp_nodes, num_temp_nodes))
 
-        # Build adjacency matrix with edge weights as Euclidean distance
-        for idx, (jx, iy) in enumerate(tqdm(nodes, desc="Building Maze Graph")):
+        # 2. Build initial adjacency matrix
+        for idx, (jx, iy) in enumerate(tqdm(temp_nodes, desc="Building Initial Maze Graph")):
             # Use 8-directional movement
             for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
                 nx, ny = jx + dx, iy + dy
                 neighbor_grid_pos = (nx, ny)
 
-                if neighbor_grid_pos in coord_to_node:
-                    neighbor_idx = coord_to_node[neighbor_grid_pos]
+                if neighbor_grid_pos in temp_coord_to_node:
+                    neighbor_idx = temp_coord_to_node[neighbor_grid_pos]
                     
-                    start_coord = node_to_coord[idx]
-                    end_coord = node_to_coord[neighbor_idx]
+                    start_coord = temp_node_to_coord[idx]
+                    end_coord = temp_node_to_coord[neighbor_idx]
 
-                    # Robust path check: sample points along the line and check all
+                    # Robust path check
                     is_path_clear = True
-                    num_interp_points = 5 # Number of points to check between nodes
+                    num_interp_points = 5 
                     for k in range(num_interp_points + 1):
                         alpha = k / num_interp_points
                         interp_point = (start_coord[0] * (1 - alpha) + end_coord[0] * alpha,
@@ -118,7 +112,42 @@ class GeodesicDistanceCalculator:
                     
                     if is_path_clear:
                         dist = np.linalg.norm(np.array(start_coord) - np.array(end_coord))
-                        adj_matrix[idx, neighbor_idx] = dist
+                        temp_adj_matrix[idx, neighbor_idx] = dist
+
+        # 3. Filter largest connected component
+        # Convert to CSR for efficiency
+        temp_adj_csr = csr_matrix(temp_adj_matrix)
+        n_components, labels = connected_components(csgraph=temp_adj_csr, directed=False, return_labels=True)
+        
+        # Find the label of the largest component
+        counts = np.bincount(labels)
+        largest_component_label = np.argmax(counts)
+        
+        # Select nodes belonging to the largest component
+        valid_indices = np.where(labels == largest_component_label)[0]
+        
+        # Re-build graph structures with only valid nodes
+        nodes = []
+        coord_to_node = {}
+        node_to_coord = []
+        
+        # Mapping from old index to new index
+        old_to_new_idx = {}
+        
+        for new_idx, old_idx in enumerate(valid_indices):
+            grid_pos = temp_nodes[old_idx]
+            coord = temp_node_to_coord[old_idx]
+            
+            nodes.append(grid_pos)
+            coord_to_node[grid_pos] = new_idx
+            node_to_coord.append(coord)
+            old_to_new_idx[old_idx] = new_idx
+            
+        # Extract sub-matrix for the largest component
+        # Efficient slicing using valid_indices
+        adj_matrix = temp_adj_matrix[valid_indices][:, valid_indices]
+        
+        print("Graph Pruning: Kept {} nodes (Largest Component) out of {} initial valid nodes.".format(len(nodes), num_temp_nodes))
 
         return nodes, csr_matrix(adj_matrix), node_to_coord, coord_to_node
 

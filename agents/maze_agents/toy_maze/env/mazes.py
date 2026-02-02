@@ -255,7 +255,7 @@ class Maze:
                 assert gs in self._segments
                 self.goal_squares.append(gs)
 
-    def is_inside_wall(self, coord, wall_thickness=0.01):
+    def is_inside_wall(self, coord, wall_thickness=1e-4):
         """
         Checks if a given coordinate is within any wall segment.
         Args:

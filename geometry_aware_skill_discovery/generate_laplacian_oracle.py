@@ -68,8 +68,16 @@ def collect_oracle_transitions(env, valid_points, grid_size):
             env.reset(state=start_pos)
             s_curr = env.state.numpy() 
             
+            # 2. Step
             env.step(action)
             s_next = env.state.numpy()
+            
+            # Check if the next state is valid (not inside a wall)
+            # If it is inside a wall, skip this transition
+            if env.maze.is_inside_wall(s_next):
+                continue
+
+            # 3. Store Data
             
             state_dict_curr = {'xy_agent': s_curr}
             state_dict_next = {'xy_agent': s_next}
