@@ -257,30 +257,39 @@ class Maze:
 
     def is_inside_wall(self, coord, wall_thickness=1e-4):
         """
-        Checks if a given coordinate is within any wall segment.
-        Args:
-            coord (tuple): (x, y) coordinate to check.
-            wall_thickness (float): How thick to consider the line walls for collision.
-        Returns:
-            bool: True if inside a wall, False otherwise.
+        Checks if a coordinate is inside a wall.
+        Logic:
+        1. Must be within a valid corridor segment (with tolerance to cover gaps).
+        2. Must NOT be on a wall line.
         """
         cx, cy = coord
+        
+        # 1. Check if inside corridor (with tolerance)
+        in_corridor = False
+        # Tolerance > 0.5 to include the boundary between segments (at 0.5 distance)
+        tolerance = 0.55 
+        for sx, sy in self._locs:
+            if abs(cx - sx) < tolerance and abs(cy - sy) < tolerance:
+                in_corridor = True
+                break
+        
+        if not in_corridor:
+            return True # Out of valid area -> Wall
+            
+        # 2. Check if hitting a wall line (Refinement to prevent wall clipping)
         for wall in self._walls:
-            ((wx1, wx2), (wy1, wy2)) = wall # w is tuple([tuple(sorted(line)) for line in w])
+            ((wx1, wx2), (wy1, wy2)) = wall
             
-            # Since walls are lines (either vertical x1=x2 or horizontal y1=y2),
-            # we check if the point is close to the line and within its extent.
-            # Note that wx1 <= wx2 and wy1 <= wy2 because of sorted(line)
-            
-            # Horizontal wall (y is constant: wy1=wy2)
-            if abs(wy1 - wy2) < 1e-6: # Check if it's a horizontal line (y coords are effectively the same)
+            # Horizontal wall
+            if abs(wy1 - wy2) < 1e-6:
                 if abs(cy - wy1) < wall_thickness and wx1 - wall_thickness <= cx <= wx2 + wall_thickness:
                     return True
-            # Vertical wall (x is constant: wx1=wx2)
-            elif abs(wx1 - wx2) < 1e-6: # Check if it's a vertical line (x coords are effectively the same)
+            # Vertical wall
+            elif abs(wx1 - wx2) < 1e-6:
                 if abs(cx - wx1) < wall_thickness and wy1 - wall_thickness <= cy <= wy2 + wall_thickness:
                     return True
-        return False
+                    
+        return False # Inside corridor and not on a wall line -> Safe
 
 
     def plot(self, ax=None):

@@ -62,7 +62,7 @@ def train():
     parser.add_argument("--maze_type", type=str, default="square_a")
     parser.add_argument("--data_path", type=str, default="data/oracle_transitions/square_a/transitions.pkl")
     parser.add_argument("--save_dir", type=str, default="logs/laplacian_encoder")
-    parser.add_argument("--dim", type=int, default=10, help="Dimension of Laplacian representation")
+    parser.add_argument("--dim", type=int, default=20, help="Dimension of Laplacian representation")
     parser.add_argument("--hidden_dim", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--batch_size", type=int, default=1024)
@@ -82,9 +82,10 @@ def train():
     model = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    # Weights for GGDO: d, d-1, ..., 1
-    # This encourages dimensions to capture larger eigenvalues first
-    weights = torch.arange(args.dim, 0, -1, dtype=torch.float32, device=device)
+    # Weights for Graph Loss: Uniform weights (ones)
+    # Using uniform weights allows the orthogonality loss to drive the separation of eigenfunctions
+    # naturally, rather than forcing a specific order which might distort the geometry.
+    weights = torch.ones(args.dim, dtype=torch.float32, device=device)
 
     # 3. Training Loop
     model.train()

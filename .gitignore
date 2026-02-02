@@ -4,8 +4,8 @@
 *.png
 *.pkl
 logs/square_maze
-logs/laplacian_dual_dynamics
-data/
+logs/laplacian_encoder
+data
 notebooks/logs_zero_shot/square_maze
 notebooks/arbitrary_zero_shot_logs/square_maze
 laplacian_dual_dynamics
