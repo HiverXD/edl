@@ -694,19 +694,27 @@ mazes_dict['square_corridor2'] = {'maze': Maze(*segments_corridor, goal_squares=
 
 
 segments_spiral = [
-    dict(name='spiral0', anchor='origin', direction='down', times=4),
-    dict(name='spiral1', anchor='spiral03', direction='right', times=4),
-    dict(name='spiral2', anchor='spiral13', direction='up', times=3),
-    dict(name='spiral3', anchor='spiral22', direction='left', times=2),
-    dict(name='spiral4', anchor='spiral31', direction='down', times=1),
-    dict(name='spiral5', anchor='spiral4', direction='right', times=1),
-    dict(name='spiral6', anchor='spiral5', direction='down', times=1),
-    dict(name='spiral7', anchor='spiral6', direction='left', times=2),
-    dict(name='spiral8', anchor='spiral71', direction='up', times=3),
-    dict(name='spiral9', anchor='spiral82', direction='right', times=4),
-    dict(name='spiral10', anchor='spiral93', direction='down', times=4),
+    dict(name='A', anchor='origin', direction='down', times=4),  # 1 to 5
+    dict(name='B', anchor='A3', direction='right', times=5),     # 5 to 10
+    dict(name='C', anchor='B4', direction='up', times=4),        # 10 to 14
+    dict(name='D', anchor='C3', direction='left', times=3),      # 14 to 17
+    dict(name='E', anchor='D2', direction='down', times=2),      # 17 to 19
+    dict(name='F', anchor='E1', direction='right', times=1),     # 19 to 20
 ]
-mazes_dict['spiral'] = {'maze': Maze(*segments_spiral, goal_squares=['spiral103']), 'action_range': 0.95}
+mazes_dict['spiral'] = {'maze': Maze(*segments_spiral, goal_squares=['f']), 'action_range': 0.95}
+
+segments_large_spiral = [
+    dict(name='A', anchor='origin', direction='up', times=8),    # Start at (8,0), go to (8,8)
+    dict(name='B', anchor='A7', direction='left', times=6),     # (8,8) to (2,8)
+    dict(name='C', anchor='B5', direction='down', times=6),     # (2,8) to (2,2)
+    dict(name='D', anchor='C5', direction='right', times=2),    # (2,2) to (4,2)
+    dict(name='E', anchor='D1', direction='up', times=4),       # (4,2) to (4,6)
+    dict(name='F', anchor='E3', direction='right', times=2),    # (4,6) to (6,6)
+    dict(name='G', anchor='F1', direction='down', times=6),     # (6,6) to (6,0)
+    dict(name='H', anchor='G5', direction='left', times=6),     # (6,0) to (0,0)
+    dict(name='I', anchor='H5', direction='up', times=8),       # (0,0) to (0,8)
+]
+mazes_dict['large_spiral'] = {'maze': Maze(*segments_large_spiral, goal_squares=['i7']), 'action_range': 0.95}
 
 
 _walls_to_remove = [

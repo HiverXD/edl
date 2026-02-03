@@ -270,9 +270,12 @@ class LaplacianEncoderWrapper(nn.Module):
         self.mean = torch.from_numpy(checkpoint['mean']).float()
         self.std = torch.from_numpy(checkpoint['std']).float()
         
+        # Get num_layers from args, default to 4 for backward compatibility
+        num_layers = getattr(args, 'num_layers', 4)
+        
         # Reconstruct architecture
         from geometry_aware_skill_discovery.train_laplacian_encoder import LaplacianEncoder
-        self.encoder = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim)
+        self.encoder = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim, num_layers=num_layers)
         self.encoder.load_state_dict(state_dict)
         self.encoder.eval()
         

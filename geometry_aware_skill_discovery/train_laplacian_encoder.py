@@ -13,11 +13,11 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
+import collections
 
 # Add project root to path
 sys.path.append(os.getcwd())
 
-import collections
 Step = collections.namedtuple('Step', 'agent_state, action, episode_done')
 
 class TransitionDataset(Dataset):
@@ -25,12 +25,10 @@ class TransitionDataset(Dataset):
         with open(data_path, 'rb') as f:
             data = pickle.load(f)
         
-        # We use raw_transitions: list of (s, a, s_next)
         self.transitions = data['raw_transitions']
         self.states = np.array([t[0] for t in self.transitions], dtype=np.float32)
         self.next_states = np.array([t[2] for t in self.transitions], dtype=np.float32)
         
-        # Compute mean and std for normalization
         self.mean = self.states.mean(axis=0)
         self.std = self.states.std(axis=0) + 1e-6
         
@@ -49,7 +47,7 @@ class LaplacianEncoder(nn.Module):
         curr_dim = input_dim
         for _ in range(num_layers - 1):
             layers.append(nn.Linear(curr_dim, hidden_dim))
-            layers.append(nn.ReLU())
+            layers.append(nn.LeakyReLU(0.2))
             curr_dim = hidden_dim
         layers.append(nn.Linear(curr_dim, output_dim))
         self.net = nn.Sequential(*layers)
@@ -60,15 +58,22 @@ class LaplacianEncoder(nn.Module):
 def train():
     parser = argparse.ArgumentParser()
     parser.add_argument("--maze_type", type=str, default="square_a")
-    parser.add_argument("--data_path", type=str, default="data/oracle_transitions/square_a/transitions.pkl")
+    parser.add_argument("--data_path", type=str, default=None, help="Path to transitions.pkl (auto-generated if None)")
     parser.add_argument("--save_dir", type=str, default="logs/laplacian_encoder")
     parser.add_argument("--dim", type=int, default=20, help="Dimension of Laplacian representation")
     parser.add_argument("--hidden_dim", type=int, default=256)
+    parser.add_argument("--num_layers", type=int, default=4, help="Number of layers in the MLP")
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--batch_size", type=int, default=1024)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--lambda_ortho", type=float, default=1.0, help="Weight for orthogonality loss")
     args = parser.parse_args()
+
+    # Auto-generate data_path if not provided
+    if args.data_path is None:
+        args.data_path = os.path.join("data/oracle_transitions", args.maze_type, "transitions.pkl")
+    
+    print("Loading data from: {}".format(args.data_path))
 
     # Force CPU for compatibility with legacy PyTorch 1.2.0 on modern systems
     device = torch.device("cpu")
@@ -79,12 +84,9 @@ def train():
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # 2. Create Model
-    model = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim).to(device)
+    model = LaplacianEncoder(input_dim=2, hidden_dim=args.hidden_dim, output_dim=args.dim, num_layers=args.num_layers).to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
 
-    # Weights for Graph Loss: Uniform weights (ones)
-    # Using uniform weights allows the orthogonality loss to drive the separation of eigenfunctions
-    # naturally, rather than forcing a specific order which might distort the geometry.
     weights = torch.ones(args.dim, dtype=torch.float32, device=device)
 
     # 3. Training Loop
@@ -96,30 +98,19 @@ def train():
         
         for batch_s, batch_s_next in dataloader:
             batch_s, batch_s_next = batch_s.to(device), batch_s_next.to(device)
-            
-            # Forward
             phi_s = model(batch_s)
             phi_s_next = model(batch_s_next)
             
-            # Graph Loss: minimize weighted distance between connected states
-            # (batch, dim)
             sq_diff = (phi_s - phi_s_next).pow(2)
             graph_loss = (sq_diff * weights).sum(dim=1).mean()
             
-            # Orthogonality Loss: Cov(phi) should be Identity
-            # We want E[phi * phi^T] = I
-            # Compute Gram matrix within batch
             n = phi_s.size(0)
-            # Center the features (important for covariance)
             phi_centered = phi_s - phi_s.mean(dim=0, keepdim=True)
             cov = (phi_centered.t() @ phi_centered) / (n - 1)
-            
-            # Penalty for off-diagonal (zero) and diagonal (one)
             ortho_loss = (cov - torch.eye(args.dim, device=device)).pow(2).mean()
             
             loss = graph_loss + args.lambda_ortho * ortho_loss
             
-            # Backward
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -135,17 +126,9 @@ def train():
 
     # 4. Save Model
     save_path = os.path.join(args.save_dir, args.maze_type, "default")
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
-    
+    if not os.path.exists(save_path): os.makedirs(save_path)
     model_file = os.path.join(save_path, "model.pth.tar")
-    torch.save({
-        'state_dict': model.state_dict(),
-        'mean': dataset.mean,
-        'std': dataset.std,
-        'args': args
-    }, model_file)
-    
+    torch.save({'state_dict': model.state_dict(), 'mean': dataset.mean, 'std': dataset.std, 'args': args}, model_file)
     print("Model saved to {}".format(model_file))
 
 if __name__ == "__main__":
