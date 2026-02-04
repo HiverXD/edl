@@ -139,6 +139,10 @@ class Maze:
         else:
             raise TypeError
 
+        print("DEBUG: Maze __init__ with {} segments".format(len(segment_dicts)))
+        # for i, s in enumerate(segment_dicts):
+        #     print("  Seg {}: {}".format(i, s.get('name')))
+
         for segment_dict in segment_dicts:
             self._add_segment(**segment_dict)
         self._finalize()
@@ -160,6 +164,7 @@ class Maze:
         return w
 
     def _add_segment(self, name, anchor, direction, connect=None, times=1):
+        # print("DEBUG: Adding segment '{}', anchor='{}', dir='{}', times={}".format(name, anchor, direction, times))
         name = str(name).lower()
         original_name = str(name).lower()
         if times > 1:
@@ -207,8 +212,12 @@ class Maze:
             raise ValueError
 
         new_loc = (sx + dx, sy + dy)
-        assert new_loc not in self._locs
-
+        # print(f"DEBUG: Calculated new_loc={new_loc} for '{name}'")
+        if new_loc in self._locs:
+            print("DEBUG: COLLISION! Existing locs:", self._locs)
+            raise AssertionError("Collision detected at {} while adding segment '{}'".format(new_loc, name))
+        
+        # print("DEBUG: Registered {} at {}".format(name, new_loc))
         self._segments[name] = {'loc': new_loc, 'connect': final_connect}
         for direction in ['up', 'down', 'left', 'right']:
             self._walls.add(self._wall_line(new_loc, direction))
@@ -716,6 +725,106 @@ segments_large_spiral = [
 ]
 mazes_dict['large_spiral'] = {'maze': Maze(*segments_large_spiral, goal_squares=['i7']), 'action_range': 0.95}
 
+
+segments_ant_maze_1 = [
+    # --- Base: (0,0) ---
+    # Removed dummy root to avoid collision (times=0 still creates one segment)
+    
+    # --- Column 0 (Up from 0,0) ---
+    dict(name='0,1_to_0,4', anchor='origin', direction='up', times=4),
+    
+    # --- Row 0 (Right from 0,0) ---
+    dict(name='1,0_to_3,0', anchor='origin', direction='right', times=3),
+    
+    # --- Column 3 (Up from 3,0) ---
+    dict(name='3,1_to_3,2', anchor='1,0_to_3,02', direction='up', times=2),
+    
+    # --- Row 2 (Right from 3,2) ---
+    # (3,2) -> (4,2) -> (5,2)
+    dict(name='4,2_to_5,2', anchor='3,1_to_3,21', direction='right', times=2),
+    
+    # --- Column 5 (Down from 5,2) ---
+    dict(name='5,1_to_5,0', anchor='4,2_to_5,21', direction='down', times=2),
+    
+    # --- Row 0 (Right from 5,0) ---
+    dict(name='6,0_to_9,0', anchor='5,1_to_5,01', direction='right', times=4),
+    
+    # --- Column 9 (Up from 9,0) ---
+    dict(name='9,1_to_9,4', anchor='6,0_to_9,03', direction='up', times=4),
+    
+    # --- Row 4 (Left from 9,4) ---
+    dict(name='8,4_to_5,4', anchor='9,1_to_9,43', direction='left', times=4),
+    
+    # --- Column 5 (Down from 5,4) ---
+    # Connects to 5,2 eventually. (5,3) is the bridge.
+    dict(name='5,3', anchor='8,4_to_5,43', direction='down'),
+    
+    # --- Column 7 (Up from 7,0) ---
+    # (7,0) is in 6,0_to_9,0 chain. 6,0_to_9,01 is (7,0).
+    dict(name='7,1_to_7,2', anchor='6,0_to_9,01', direction='up', times=2),
+    
+    # --- Row 2 (Right from 7,2) ---
+    # Connects to (9,2). (8,2) is the bridge.
+    dict(name='8,2', anchor='7,1_to_7,21', direction='right'),
+    
+    # --- Column 7 (Up from 7,4) ---
+    # (7,4) is in 8,4_to_5,4 chain. 8,4_to_5,41 is (7,4). (Actually 8,4 is 0, 7,4 is 1).
+    # 8,4_to_5,4: 0->(8,4), 1->(7,4), 2->(6,4), 3->(5,4).
+    dict(name='7,5_to_7,6', anchor='8,4_to_5,41', direction='up', times=2),
+    
+    # --- Row 6 (Right from 7,6) ---
+    dict(name='8,6_to_9,6', anchor='7,5_to_7,61', direction='right', times=2),
+    
+    # --- Row 4 (Left from 3,4) ---
+    # (3,4) is not created yet? No.
+    # We have (3,2). Let's go up.
+    # (3,3) is wall. So (3,4) must come from side?
+    # (3,4) neighbors (2,4) or (4,4) or (3,5).
+    # Row 4 (y=4): 1 1 0 1 0 1 1 1 1 1. C3 is 1.
+    # Access to (3,4)? 
+    # (1,4) is created in 0,1_to_0,4 -> right? 
+    # 0,1_to_0,4 chain: (0,1)->(0,2)->(0,3)->(0,4).
+    # From (0,4) -> (1,4).
+    dict(name='1,4', anchor='0,1_to_0,43', direction='right'),
+    
+    # (1,4) -> (1,5) -> (1,6) -> (0,6).
+    dict(name='1,5_to_1,6', anchor='1,4', direction='up', times=2),
+    dict(name='0,6', anchor='1,5_to_1,61', direction='left'),
+    
+    # From (0,2) -> (1,2) -> (2,2).
+    # This connects the left part of Row 2.
+    dict(name='1,2_to_2,2', anchor='0,1_to_0,41', direction='right', times=2),
+    
+    # From (3,4)? How to reach (3,4)?
+    # (3,4) neighbors (3,5). (3,5) is 1.
+    # (3,5) neighbors (3,6). (3,6) is 1.
+    # (3,6) neighbors (4,6). (4,6) is 1.
+    # (4,6) neighbors (5,6). (5,6) is 1.
+    # (5,6) neighbors (5,5). (5,5) is 1.
+    # (5,5) is neighbor of (5,4). (5,4) is created!
+    # So path: (5,4) -> (5,5) -> (5,6) -> (4,6) -> (3,6) -> (3,5) -> (3,4).
+    dict(name='5,5_to_5,6', anchor='8,4_to_5,43', direction='up', times=2),
+    dict(name='4,6_to_3,6', anchor='5,5_to_5,61', direction='left', times=2),
+    dict(name='3,5_to_3,4', anchor='4,6_to_3,61', direction='down', times=2),
+]
+
+# Additional walls to remove to ensure loops and connectivity
+_walls_to_remove_ant_1 = [
+    # (5,2) and (5,3). Horizontal wall at y=2.5.
+    ((4.5, 5.5), (2.5, 2.5)), 
+    
+    # (9,2) and (8,2). Vertical wall at x=8.5.
+    ((8.5, 8.5), (1.5, 2.5)), # Vertical wall at x=8.5, y in [1.5, 2.5]
+    
+    # (2,2) and (3,2). Vertical wall at x=2.5.
+    ((2.5, 2.5), (1.5, 2.5)),
+    
+    # (3,4) and (?). (3,4) connects to (2,4)? (2,4) is 0 (wall).
+    # (3,4) connects to (4,4)? (4,4) is 0 (wall).
+    # So (3,4) is only connected vertically.
+]
+
+mazes_dict['square_ant_maze_1'] = {'maze': Maze(*segments_ant_maze_1, goal_squares=['8,6_to_9,61'], walls_to_remove=_walls_to_remove_ant_1), 'action_range': 0.95}
 
 _walls_to_remove = [
     ((4.5, 4.5), (7.5, 8.5)),
