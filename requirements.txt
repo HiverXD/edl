@@ -64,3 +64,5 @@ virtualenv==15.0.1
 wcwidth==0.1.7
 webencodings==0.5.1
 widgetsnbextension==3.5.0
+joblib==0.14.1
+scikit-learn==0.22.2.post1

@@ -284,3 +284,100 @@ def state_coverage(exp, cell_size, ax=None, notebook_mode=True, **kwargs):
     
     return ax
 
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
+import torch
+# from sklearn.manifold import TSNE  # 필요한 경우 import
+
+def visualize_laplacian_embedding(env, phi_encoder, grid_resolution=0.1, ax_arr=None):
+    """
+    Visualizes the Laplacian embedding of the maze state space.
+    """
+    if ax_arr is None:
+        # layout='constrained'를 쓰면 제목 겹침을 자동으로 더 잘 잡아줍니다.
+        fig, ax_arr = plt.subplots(1, 3, figsize=(18, 6), layout='constrained')
+        
+    ax1, ax2, ax3 = ax_arr
+    
+    # 1. Generate Grid Points
+    try:
+        env_lims = ENV_LIMS[env.maze_type] # ENV_LIMS가 정의되어 있다고 가정
+        min_x, max_x = env_lims['x']
+        min_y, max_y = env_lims['y']
+    except (KeyError, NameError):
+        # Fallback (미로 크기에 맞춰 조절 필요)
+        min_x, max_x, min_y, max_y = -5.5, 5.5, -5.5, 0.5
+        
+    x_coords = np.arange(min_x, max_x, grid_resolution)
+    y_coords = np.arange(min_y, max_y, grid_resolution)
+    X, Y = np.meshgrid(x_coords, y_coords)
+    
+    grid_points = np.stack([X.flatten(), Y.flatten()], axis=1)
+    
+    # Filter valid points
+    valid_points = []
+    for p in grid_points:
+        if not env.maze.is_inside_wall(p):
+            valid_points.append(p)
+            
+    valid_points = np.array(valid_points)
+    
+    if len(valid_points) == 0:
+        print("No valid points found for visualization.")
+        return
+        
+    # 2. Assign Colors (Rainbow Style)
+    # Normalize coordinates to 0-1
+    norm_x = (valid_points[:, 0] - min_x) / (max_x - min_x)
+    norm_y = (valid_points[:, 1] - min_y) / (max_y - min_y)
+    
+    # [수정됨] 대각선 방향(x+y)으로 무지개색 매핑 (Spectral/Rainbow Color Map)
+    # Hilp 논문 등에서 자주 쓰는 방식: 위치에 따라 색상이 부드럽게 변함
+    color_index = (norm_x + norm_y) / 2  # 0.0 ~ 1.0 사이 값
+    cmap = plt.get_cmap('jet')  # 'rainbow', 'jet', 'turbo', 'nipy_spectral' 추천
+    colors = cmap(color_index)
+    
+    # 3. Compute Laplacian Embeddings
+    S_t = torch.tensor(valid_points, dtype=torch.float32)
+    with torch.no_grad():
+        # device 처리 추가 (안전을 위해)
+        device = next(phi_encoder.parameters()).device
+        phi = phi_encoder(S_t.to(device)).cpu().detach().numpy()
+        
+    # 4. Plot 1: Maze Grid
+    env.maze.plot(ax1)
+    # [수정됨] s=10 -> s=2 (점 크기 축소), alpha=0.6 (투명도 추가해 겹침 방지)
+    ax1.scatter(valid_points[:, 0], valid_points[:, 1], c=colors, s=2, alpha=0.8)
+    ax1.set_title("Maze Grid (Coordinate Space)", fontsize=12)
+    # config_subplot(ax1, maze_type=env.maze_type) # 정의되어 있다면 사용
+    ax1.axis('equal') # 비율 유지
+    
+    # 5. Plot 2: Laplacian Embedding (Dim 1 vs Dim 2)
+    # 보통 phi[0]는 상수(Const)일 수 있으므로 phi[1], phi[2]를 찍는 경우도 많습니다.
+    # 확인해보고 분산이 없는 차원은 건너뛰세요. 여기선 0, 1로 유지합니다.
+    ax2.scatter(phi[:, 0], phi[:, 1], c=colors, s=2, alpha=0.8) # 점 크기 축소
+    ax2.set_title("Laplacian Embedding (Dim 0 vs 1)", fontsize=12)
+    ax2.set_xlabel("$\phi_1$", fontsize=10)
+    ax2.set_ylabel("$\phi_2$", fontsize=10)
+    ax2.grid(True, alpha=0.3)
+    
+    # 6. Plot 3: t-SNE
+    try:
+        from sklearn.manifold import TSNE
+        # print("Computing t-SNE...") # 로그 너무 많으면 주석 처리
+        # Perplexity를 높이면(50~100) 찢어짐 현상이 줄어들고 글로벌 구조가 더 잘 보임
+        tsne = TSNE(n_components=2, random_state=42, perplexity=min(100, len(valid_points)-1))
+        phi_tsne = tsne.fit_transform(phi)
+        
+        ax3.scatter(phi_tsne[:, 0], phi_tsne[:, 1], c=colors, s=2, alpha=0.8) # 점 크기 축소
+        ax3.set_title("t-SNE of $\phi$ (All Dims)", fontsize=12)
+        ax3.grid(True, alpha=0.3)
+    except ImportError:
+        ax3.text(0.5, 0.5, "sklearn not installed", ha='center')
+        
+    # [수정됨] 제목 겹침 방지 (layout='constrained'를 썼다면 필요 없을 수 있으나 안전장치)
+    # plt.tight_layout()은 layout='constrained'와 충돌할 수 있으니 둘 중 하나만 사용.
+    # 여기서는 안전하게 tight_layout을 명시적으로 호출 (위에서 constrained 안 썼을 경우 대비)
+
+    return ax_arr
