@@ -144,7 +144,7 @@ def main():
     parser.add_argument("--random_walk_length", type=int, default=50)
     parser.add_argument("--num_episodes", type=int, default=400)
     parser.add_argument("--max_samples_num", type=int, default=10000)
-    parser.add_argument("--save_dir", type=str, default="data/oracle_transitions")
+    parser.add_argument("--save_dir", type=str, default=None)
     
     args = parser.parse_args()
     
@@ -166,9 +166,15 @@ def main():
                 final_allo.extend(allo_steps)
             raw_transitions = final_raw
             allo_steps = final_allo
+            save_dir = "data/oracle_transitions/default"
+    else:
+        save_dir = "data/oracle_transitions/random_walk"
+
+    if args.save_dir is not None:
+        save_dir = args.save_dir
 
     # Save Data
-    save_path = os.path.join(args.save_dir, args.maze_type)
+    save_path = os.path.join(save_dir, args.maze_type)
     if not os.path.exists(save_path): os.makedirs(save_path)
     file_path = os.path.join(save_path, "transitions.pkl")
     

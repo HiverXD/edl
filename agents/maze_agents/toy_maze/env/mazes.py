@@ -139,7 +139,7 @@ class Maze:
         else:
             raise TypeError
 
-        print("DEBUG: Maze __init__ with {} segments".format(len(segment_dicts)))
+        # print("DEBUG: Maze __init__ with {} segments".format(len(segment_dicts)))
         # for i, s in enumerate(segment_dicts):
         #     print("  Seg {}: {}".format(i, s.get('name')))
 

@@ -3,9 +3,12 @@
 *.DS_Store
 *.png
 *.pkl
+*.pth.tar
+*.pth
 logs/square_maze
 logs/laplacian_encoder
 data
+notebooks/imgs
 notebooks/logs_zero_shot/square_maze
 notebooks/arbitrary_zero_shot_logs/square_maze
 laplacian_dual_dynamics
