@@ -141,9 +141,9 @@ def main():
     parser.add_argument("--grid_size", type=float, default=0.1)
     parser.add_argument("--get_skeleton", action="store_true")
     parser.add_argument("--use_random_walk", action="store_true")
-    parser.add_argument("--random_walk_length", type=int, default=50)
+    parser.add_argument("--random_walk_length", type=int, default=100)
     parser.add_argument("--num_episodes", type=int, default=400)
-    parser.add_argument("--max_samples_num", type=int, default=10000)
+    parser.add_argument("--max_samples_num", type=int, default=40000)
     parser.add_argument("--save_dir", type=str, default=None)
     
     args = parser.parse_args()

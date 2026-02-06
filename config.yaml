@@ -1,0 +1,31 @@
+# Curriculum Training Configuration for Laplacian Encoder
+experiment:
+  maze_type: "spiral"
+  exp_name: "curriculum"
+  dim: 10
+  hidden_dim: 256
+
+stages:
+  - id: 1
+    name: "coarse_skeleton"
+    generation:
+      grid_size: 0.5
+      get_skeleton: true
+      use_random_walk: true
+      num_episodes: 400
+    training:
+      epochs: 300
+      lr: 0.001
+      resume: false
+
+  - id: 2
+    name: "fine_grid"
+    generation:
+      grid_size: 0.25
+      get_skeleton: false
+      use_random_walk: true
+      num_episodes: 400
+    training:
+      additional_epochs: 200
+      lr: 0.001
+      resume: true

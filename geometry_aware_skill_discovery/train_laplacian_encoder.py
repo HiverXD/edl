@@ -53,7 +53,7 @@ class TransitionDataset(Dataset):
 
 class LaplacianEncoder(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers=4):
-        super(LaplacianEncoder, self).__init__()
+        super().__init__()
         layers = []
         curr_dim = input_dim
         for _ in range(num_layers - 1):
@@ -209,12 +209,13 @@ def train():
     print("\n--- Starting Refined ALLO Training ---")
     
     # Outer progress bar for epochs
-    pbar = tqdm(range(start_epoch, total_epochs), desc="Training")
+    pbar = tqdm(range(start_epoch, total_epochs), desc="Training", ascii=True)
     
-    best_ortho_error = float('inf')
-    patience = 20
+    best_gloss = float('inf')
+    best_ortho = float('inf')
+    patience = 10
     patience_counter = 0
-    ortho_threshold = 1e-4
+    ortho_threshold = 1e-3
 
     for epoch in pbar:
         epoch_metrics = collections.defaultdict(list)
@@ -235,21 +236,34 @@ def train():
             'Rho': "{0:.1f}".format(avg_metrics['rho'])
         })
 
-        # Periodic save every 10 epochs
+        # Periodic save and check
         if (epoch + 1) % 10 == 0:
+            # Check for negative eigenvalues
+            neg_check = any(ev < 0 for ev in avg_metrics['eigenvalues'])
+            if neg_check:
+                pbar.write("Epoch {0}: Warning - Negative eigenvalue estimates detected.".format(epoch + 1))
+            
             save_checkpoint(model, trainer, dataset, log_history, args, model_file, stats_file)
 
-        # Early Stopping Logic
-        current_ortho = avg_metrics['ortho_error']
-        if current_ortho < ortho_threshold:
-            if current_ortho < best_ortho_error:
-                best_ortho_error = current_ortho
-                patience_counter = 0
-            else:
+
+        # Early Stopping Logic: Stop if BOTH haven't improved significantly
+        if avg_metrics['ortho_error'] < ortho_threshold:
+            improved_gloss = avg_metrics['graph_loss'] < best_gloss * 0.999
+            improved_ortho = avg_metrics['ortho_error'] < best_ortho * 0.999
+            
+            if not (improved_gloss or improved_ortho):
                 patience_counter += 1
+            else:
+                patience_counter = 0
+                if avg_metrics['graph_loss'] < best_gloss: best_gloss = avg_metrics['graph_loss']
+                if avg_metrics['ortho_error'] < best_ortho: best_ortho = avg_metrics['ortho_error']
+            
             if patience_counter >= patience:
-                print("\nEarly stopping at epoch {0}.".format(epoch+1))
+                pbar.write("\nEarly stopping at epoch {0}: No significant improvement in structure or constraints.".format(epoch+1))
                 break
+        else:
+            patience_counter = 0
+
 
     # Final save
     save_checkpoint(model, trainer, dataset, log_history, args, model_file, stats_file)

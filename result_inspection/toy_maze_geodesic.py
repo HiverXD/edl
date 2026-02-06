@@ -224,9 +224,14 @@ def visualize_distance_heatmap(exp, metric_fn, s0=(0.0, 0.0), ax=None, resolutio
     """Visualizes distance from reference state s0 to all other states."""
     if ax is None: fig, ax = plt.subplots(1, 1, figsize=(8, 8))
     env = exp.learner.agent.env
-    try: lims = ENV_LIMS[env.maze_type]
-    except KeyError: lims = {'x': (-5.5, 5.5), 'y': (-5.5, 0.5)}
-    x_coords, y_coords = np.arange(lims['x'][0], lims['x'][1], resolution), np.arange(lims['y'][0], lims['y'][1], resolution)
+    try:
+        env_lims = ENV_LIMS[env.maze_type]
+        min_x, max_x = env_lims['x']
+        min_y, max_y = env_lims['y']
+    except KeyError:
+        raise Exception('key error, add toy_maze.py, ENV_LIMS')
+    x_coords = np.arange(min_x, max_x, resolution)
+    y_coords = np.arange(min_y, max_y, resolution)
     X, Y = np.meshgrid(x_coords, y_coords)
     grid_points = np.stack([X.flatten(), Y.flatten()], axis=1)
     valid_mask = np.array([not env.maze.is_inside_wall(p) for p in grid_points])
@@ -237,5 +242,7 @@ def visualize_distance_heatmap(exp, metric_fn, s0=(0.0, 0.0), ax=None, resolutio
     config_subplot(ax, maze_type=env.maze_type); env.maze.plot(ax)
     mesh = ax.pcolormesh(X, Y, flat_dists.reshape(X.shape), cmap='viridis', shading='auto', alpha=0.8)
     ax.plot(s0[0], s0[1], 'r*', markersize=15); ax.set_title(title)
+    ax.set_xlim(min_x - 0.5, max_x + 0.5)
+    ax.set_ylim(min_y - 0.5, max_y + 0.5)
     plt.colorbar(mesh, ax=ax, fraction=0.046, pad=0.04)
     return ax

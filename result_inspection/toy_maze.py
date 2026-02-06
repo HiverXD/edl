@@ -8,16 +8,19 @@ import matplotlib.pyplot as plt
 import torch
 
 # Define ENV_LIMS here to break circular dependency
-ENV_LIMS = {
-    'square_a': {'x': (-0.5, 4.5), 'y': (-4.5, 0.5)},
-    'square_b': {'x': (-0.5, 4.5), 'y': (-4.5, 4.5)},
-    'square_c': {'x': (-0.5, 4.5), 'y': (-4.5, 4.5)},
-    'square_d': {'x': (-3.5, 3.5), 'y': (-3.5, 0.5)},
-    'spiral': {'x': (-0.5, 4.5), 'y': (-4.5, 0.5)},
-    'square_bottleneck': {'x': (-0.5, 9.5), 'y': (-0.5, 9.5)},
-    'square_tree': {'x': (-4.5, 4.5), 'y': (-6.5, 0.5)},
-    'square_corridor': {'x': (-5.5, 5.5), 'y': (-0.5, 0.5)},
-}
+
+ENV_LIMS = dict(
+    square_a=dict(xlim=(-0.55, 4.55), ylim=(-4.55, 0.55), x=(-0.5, 4.5), y=(-4.5, 0.5)),
+    square_b=dict(xlim=(-0.55, 4.55), ylim=(-4.55, 0.55), x=(-0.5, 4.5), y=(-4.5, 0.5)),
+    square_c=dict(xlim=(-0.55, 4.55), ylim=(-4.55, 0.55), x=(-0.5, 4.5), y=(-4.5, 0.5)),
+    square_bottleneck=dict(xlim=(-0.55, 9.55), ylim=(-0.55, 9.55), x=(-0.5, 9.5), y=(-0.5, 9.5)),
+    square_corridor=dict(xlim=(-5.55, 5.55), ylim=(-0.55, 0.55), x=(-5.5, 5.5), y=(-0.5, 0.5)),
+    square_corridor2=dict(xlim=(-5.55, 5.55), ylim=(-0.55, 0.55), x=(-5.5, 5.5), y=(-0.5, 0.5)),
+    square_tree=dict(xlim=(-6.55, 6.55), ylim=(-6.55, 0.55), x=(-6.5, 6.5), y=(-6.5, 0.5)),
+    spiral=dict(xlim=(-0.55, 5.55), ylim=(-4.55, 0.55), x=(-0.5, 5.5), y=(-4.5, 0.5)),
+    large_spiral=dict(xlim=(-8.55, 0.55), ylim=(-0.55, 8.55), x=(-8.5, 0.5), y=(-0.5, 8.5)),
+    square_ant_maze_1=dict(xlim=(-0.55, 9.55), ylim=(-0.55, 6.55), x=(-0.5, 9.5), y=(-0.5, 6.5)),
+)
 
 def config_subplot(ax, maze_type="square_a", exp=None):
     if exp:
@@ -25,8 +28,8 @@ def config_subplot(ax, maze_type="square_a", exp=None):
     
     try:
         lims = ENV_LIMS[maze_type]
-        ax.set_xlim(lims['x'])
-        ax.set_ylim(lims['y'])
+        ax.set_xlim(lims['xlim'])
+        ax.set_ylim(lims['ylim'])
     except KeyError:
         pass
     ax.set_aspect('equal')
@@ -49,7 +52,7 @@ def visualize_laplacian_embedding(env, calc, grid_resolution=0.1, t=1.0, ax_arr=
         min_x, max_x = env_lims['x']
         min_y, max_y = env_lims['y']
     except KeyError:
-        min_x, max_x, min_y, max_y = -5.5, 5.5, -5.5, 0.5
+        raise Exception('key error, add toy_maze.py, ENV_LIMS')
         
     x_coords = np.arange(min_x, max_x, grid_resolution)
     y_coords = np.arange(min_y, max_y, grid_resolution)
