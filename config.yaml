@@ -1,6 +1,6 @@
 # Curriculum Training Configuration for Laplacian Encoder
 experiment:
-  maze_type: "spiral"
+  maze_type: "large_spiral"
   exp_name: "curriculum"
   dim: 10
   hidden_dim: 256
@@ -14,7 +14,7 @@ stages:
       use_random_walk: true
       num_episodes: 400
     training:
-      epochs: 300
+      epochs: 30
       lr: 0.001
       resume: false
 
@@ -26,6 +26,6 @@ stages:
       use_random_walk: true
       num_episodes: 400
     training:
-      additional_epochs: 200
+      additional_epochs: 20
       lr: 0.001
       resume: true

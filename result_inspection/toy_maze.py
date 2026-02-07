@@ -20,6 +20,7 @@ ENV_LIMS = dict(
     spiral=dict(xlim=(-0.55, 5.55), ylim=(-4.55, 0.55), x=(-0.5, 5.5), y=(-4.5, 0.5)),
     large_spiral=dict(xlim=(-8.55, 0.55), ylim=(-0.55, 8.55), x=(-8.5, 0.5), y=(-0.5, 8.5)),
     square_ant_maze_1=dict(xlim=(-0.55, 9.55), ylim=(-0.55, 6.55), x=(-0.5, 9.5), y=(-0.5, 6.5)),
+    square_large=dict(xlim=(-0.55, 9.55), ylim=(-0.55, 9.55), x=(-0.5, 9.5), y=(-0.5, 9.5)),
 )
 
 def config_subplot(ax, maze_type="square_a", exp=None):

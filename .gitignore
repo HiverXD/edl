@@ -5,6 +5,8 @@
 *.pkl
 *.pth.tar
 *.pth
+*.yaml
+*.json
 logs/square_maze
 logs/laplacian_encoder
 data
