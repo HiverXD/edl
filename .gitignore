@@ -7,8 +7,7 @@
 *.pth
 *.yaml
 *.json
-logs/square_maze
-logs/laplacian_encoder
+logs
 data
 notebooks/imgs
 notebooks/logs_zero_shot/square_maze

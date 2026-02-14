@@ -1,6 +1,6 @@
 # Curriculum Training Configuration for Laplacian Encoder
 experiment:
-  maze_type: "large_spiral"
+  maze_type: "square_bottleneck"
   exp_name: "curriculum"
   dim: 10
   hidden_dim: 256
@@ -14,7 +14,7 @@ stages:
       use_random_walk: true
       num_episodes: 400
     training:
-      epochs: 30
+      epochs: 300
       lr: 0.001
       resume: false
 
@@ -24,8 +24,20 @@ stages:
       grid_size: 0.25
       get_skeleton: false
       use_random_walk: true
-      num_episodes: 400
+      num_episodes: 800
     training:
-      additional_epochs: 20
+      additional_epochs: 200
       lr: 0.001
       resume: true
+
+vqvae:
+  mode: "identity"  # identity, commute, diffusion
+  num_samples: 50000 # Number of continuous samples for discovery
+  log_dir: "logs/vqvae"
+  hidden_size: 128
+  codebook_size: 10 # Number of skills (K)
+  code_size: 16     # Latent dimension (D)
+  learning_rate: 0.0001
+  batch_size: 2048
+  epochs: 5000
+  normalize_inputs: false
