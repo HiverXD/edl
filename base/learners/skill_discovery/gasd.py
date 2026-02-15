@@ -18,7 +18,7 @@ from agents.maze_agents.modules.value_function import Critic
 class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
     """
     Geometry Aware Skill Discovery (GASD) Learner.
-    Upgraded version: Policy receives Laplacian embedding psi(g) as skill input.
+    Final Fixed Version: Corrects reward relabeling and logging indices.
     """
     AGENT_TYPE = 'GASD'
 
@@ -38,21 +38,23 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         self.reward_scale = float(kwargs.pop('reward_scale', 1.0))
         self.im_nu_val = float(kwargs.get('im_nu', 1.0))
         
-        # 2. Setup logging keys
         self.master_keys = kwargs.pop('logging_keys', [])
-        
+        if not self.master_keys:
+            self.master_keys = ["success", "dist_to_goal", "cum_rew_total", "cum_rew_im", "cum_rew_ext", 
+                                "batch_rew_mean", "avg_q1", "avg_q2", "q1_loss", "q2_loss", 
+                                "p_loss", "alpha_loss", "alpha", "rew_pot", "rew_pen", "rew_gauss", "rew_bon"]
+
         if 'im_params' not in kwargs:
             kwargs['im_params'] = {'nu': self.im_nu_val, 'type': 'SPECTRA'}
         
-        # 3. Base Initializations (calls _make_im_modules)
         super(GASDSACV2Learner, self).__init__(**kwargs)
         
-        # 4. Final attributes restore
         self.ep_summary_keys = self.master_keys
         self.im_nu = self.im_nu_val
         self.im_lambda = 0.0
         
-        print("GASD Learner initialized. Using Psi(g) skill injection.")
+        # Local stats store to ensure fill_summary gets the RIGHT data
+        self._current_ep_breakdown = {}
 
     def _make_im_modules(self):
         self.im = SPECTRAProvider(
@@ -64,71 +66,96 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         self.skill_dim = self.im.n_skills
         return self.im
 
-    def _make_agent_modules(self):
-        if not hasattr(self, 'skill_dim') or self.im is None:
-            self._make_im_modules()
+    def relabel_episode(self):
+        """
+        Manually relabel the current episode with SPECTRA rewards and record distances.
+        """
+        self._compress_me = []
+        ep = self.agent.episode
+        self.distance = [] # Reset for current ep
+        
+        # Convert episode to batch for vector processing
+        batched = {key: torch.stack([e[key] for e in ep]) for key in ep[0].keys()}
+        
+        with torch.no_grad():
+            total_rewards = self.im.surprisal(batched, gamma=self.pbrs_gamma, reward_type=self.reward_type)
+            breakdown = self.im._last_breakdown
             
-        # --- NEW: Skill Embedding is now the actual Laplacian Coordinates ---
-        # skill_n is the number of clusters (discrete skills)
+        # Update each transition and record distances
+        for i, e in enumerate(ep):
+            spectra_r = total_rewards[i].item()
+            e['reward'] = torch.tensor(spectra_r * self.im_nu)
+            e['im_reward'] = torch.tensor(spectra_r)
+            e['env_reward'] = torch.tensor(0.0)
+            
+            # Record distance to goal for logging
+            d = self._dummy_env.dist(e['next_state'], e['goal']).item()
+            self.distance.append(d)
+            
+        # Capture breakdown mean for this specific episode summary
+        self._current_ep_breakdown = breakdown
+        self._compress_me.append(ep)
+
+    def fill_summary(self, *values):
+        """
+        Final authority on logging order.
+        Values from SAC: (r_mean, q1, q2, q1_l, q2_l, p_l, a_l, alpha)
+        """
+        b = self._current_ep_breakdown
+        ep = self.agent.episode
+        
+        summary = [
+            float(self.was_success),
+            float(self.dist_to_goal),
+            float(sum([e['reward'].item() for e in ep])),
+            float(sum([e['im_reward'].item() for e in ep])),
+            0.0, # cum_rew_ext
+            
+            # SAC internal stats
+            values[0].item(), values[1].item(), values[2].item(),
+            values[3].item(), values[4].item(), values[5].item(),
+            values[6].item(), values[7].item(),
+            
+            # SPECTRA detailed components
+            b.get('potential', 0.0),
+            b.get('penalty', 0.0),
+            b.get('gauss', 0.0),
+            b.get('bonus', 0.0)
+        ]
+        self._ep_summary = summary
+
+    def _make_agent_modules(self):
+        if not hasattr(self, 'skill_dim') or self.im is None: self._make_im_modules()
         skill_n = self.skill_dim
-        # embedding_dim is the Laplacian dimension (e.g., 10)
-        embedding_dim = self.im.centroids_psi.shape[1]
-        
-        self.skill_embedding = torch.nn.Embedding(skill_n, embedding_dim)
-        # Load actual centroids into the embedding weight
-        self.skill_embedding.weight.data.copy_(self.im.centroids_psi)
-        self.skill_embedding.weight.requires_grad = False
-        
-        # Policy & Twin Q goal_size is now the Laplacian embedding dim
+        self.skill_embedding = torch.nn.Embedding(skill_n, self.im.centroids_psi.shape[1])
+        self.skill_embedding.weight.data.copy_(self.im.centroids_psi); self.skill_embedding.weight.requires_grad = False
         kwargs = dict(env=self._dummy_env, hidden_size=self.hidden_size, num_layers=self.num_layers,
-                      goal_size=embedding_dim, normalize_inputs=self.normalize_inputs)
-        
+                      goal_size=self.skill_embedding.embedding_dim, normalize_inputs=self.normalize_inputs)
         self.policy = StochasticPolicy(**kwargs)
         self.q1 = Critic(**kwargs); self.q2 = Critic(**kwargs)
         self.q1_target = Critic(**kwargs); self.q2_target = Critic(**kwargs)
         self.q1_target.load_state_dict(self.q1.state_dict()); self.q2_target.load_state_dict(self.q2.state_dict())
 
+    def create_env(self):
+        from agents.maze_agents.toy_maze.env.maze_env import Env
+        params = self.env_params.copy()
+        params['maze_type'] = self.maze_type; params['n'] = self.ep_len; params['done_on_success'] = True
+        return Env(**params)
+
     def _make_agent(self):
         from agents.maze_agents.toy_maze.skill_discovery.edl import DistanceStochasticAgent
         class DummyVAE:
-            def __init__(self, provider): self.provider = provider
-            def get_centroids(self, batch): return self.provider.get_goal_for_skill(batch['skill'])
-        
-        # DistanceStochasticAgent expects vae.get_centroids() to return physical coords for Env.reset()
+            def __init__(self, p): self.p = p
+            def get_centroids(self, b): return self.p.get_goal_for_skill(b['skill'])
         return DistanceStochasticAgent(env=self.create_env(), policy=self.policy, skill_n=self.skill_dim,
                                        skill_embedding=self.skill_embedding, vae=DummyVAE(self.im))
 
     def relabel_batch(self, batch):
         with torch.no_grad():
             spectra_rew = self.im.surprisal(batch, gamma=self.pbrs_gamma, reward_type=self.reward_type)
-        im_nu = self.im_nu if self.im_nu is not None else 1.0
-        batch['reward'] = (batch.get('env_reward', 0.0) * float(self.env_reward)) + (im_nu * spectra_rew)
+        batch['reward'] = (batch.get('env_reward', 0.0) * float(self.env_reward)) + (self.im_nu * spectra_rew)
         batch['im_reward'] = spectra_rew
         return batch
-
-    def fill_summary(self, *values):
-        b = getattr(self.im, '_last_breakdown', {})
-        summary = [
-            float(self.was_success), float(self.dist_to_goal),
-            float(sum([e['reward'] for e in self.agent.episode])),
-            float(sum([e.get('im_reward', 0.) for e in self.agent.episode])),
-            float(sum([e.get('env_reward', 0.) for e in self.agent.episode])),
-            values[0].item(), values[1].item(), values[2].item(),
-            values[3].item(), values[4].item(), values[5].item(),
-            values[6].item(), values[7].item(),
-            b.get('potential', 0.0), b.get('penalty', 0.0),
-            b.get('gauss', 0.0), b.get('bonus', 0.0)
-        ]
-        self._ep_summary = summary
-
-    def create_env(self):
-        from agents.maze_agents.toy_maze.env.maze_env import Env
-        params = self.env_params.copy()
-        params['maze_type'] = self.maze_type
-        params['n'] = self.ep_len
-        # Set done_on_success=True to potentially speed up training
-        params['done_on_success'] = True
-        return Env(**params)
 
     def get_optim_params(self):
         params = super(GASDSACV2Learner, self).get_optim_params()
@@ -142,7 +169,6 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
     def sample_skill(self): return torch.randint(0, self.skill_dim, (1,))
     def preprocess_skill(self, z):
         if z.dtype != torch.long: z = z.long()
-        # Returns Centroid Psi coordinate
         return self.skill_embedding(z)
     def get_values(self, batch): return torch.zeros_like(batch['reward'])
     def get_terminal_values(self, batch): return torch.zeros_like(batch['reward'][-1:])
