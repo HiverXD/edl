@@ -32,13 +32,13 @@ def run_rl_training():
     print("--- Starting GASD RL Training ({0}) for {1} ---".format(reward_type, maze_type))
 
     # 2. Resolve Experiment Directory
+    # We want logs/rl/maze_type/exp_name/reward_type/
     log_root = rl_cfg.get('log_dir', "logs/rl")
     exp_dir = os.path.join(log_root, maze_type, exp_name, reward_type)
     if not os.path.exists(exp_dir):
         os.makedirs(exp_dir)
 
     # 3. Create JSON config for main.py compatibility
-    # Note: Training hyperparameters should be at the top level
     json_config = {
         "agent_type": "maze",
         "learner_type": "GASD",
@@ -63,23 +63,23 @@ def run_rl_training():
             "sparse_bonus": rl_cfg.get('sparse_bonus', 0.0),
             "success_threshold": rl_cfg.get('success_threshold', 0.2)
         },
-        # These are used by managers/workers
         "save_buffer": False,
         "env_steps_per_cycle": 100,
         "gradient_steps_per_cycle": 50,
         "cycles_per_epoch": 10
     }
-
-    temp_json_path = os.path.join(exp_dir, "config.json")
+    
+    # Use a specific name for the config file so main.py doesn't name the experiment 'config'
+    temp_json_path = os.path.join(exp_dir, "spectra_config.json")
     with open(temp_json_path, 'w') as f:
         json.dump(json_config, f, indent=4)
     
     # 4. Prepare CLI Command for main.py
-    # Command: python main.py --config-path <path> --log-dir <dir> --N <workers> --dur <steps>
+    # We set log-dir to the specific exp_dir parent so main.py puts everything inside reward_type folder
     cmd = [
         "python", "main.py",
         "--config-path", temp_json_path,
-        "--log-dir", log_root,
+        "--log-dir", os.path.dirname(exp_dir),
         "--N", str(rl_cfg.get('num_workers', 1)),
         "--dur", str(rl_cfg.get('dur', 500000))
     ]
@@ -91,12 +91,12 @@ def run_rl_training():
         process = subprocess.Popen(cmd)
         process.wait()
     except KeyboardInterrupt:
-        print("Training interrupted by user.")
+        print("\nTraining interrupted by user.")
         process.terminate()
     except Exception as e:
-        print("Error during training: {0}".format(e))
+        print("\nError during training: {0}".format(e))
     finally:
-        print("Training finished. Logs: {0}".format(exp_dir))
+        print("\nTraining finished. Logs: {0}".format(exp_dir))
 
 if __name__ == "__main__":
     run_rl_training()

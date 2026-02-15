@@ -28,34 +28,37 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         self.pbrs_gamma = float(kwargs.pop('pbrs_gamma', 0.99))
         self.reward_type = str(kwargs.pop('reward_type', 'dynamic')).lower()
         
-        # Reward refinements
-        time_penalty = float(kwargs.pop('time_penalty', 0.0))
-        sparse_bonus = float(kwargs.pop('sparse_bonus', 0.0))
-        success_threshold = float(kwargs.pop('success_threshold', 0.2))
+        self.time_penalty = float(kwargs.pop('time_penalty', 0.0))
+        self.sparse_bonus = float(kwargs.pop('sparse_bonus', 0.0))
+        self.success_threshold = float(kwargs.pop('success_threshold', 0.2))
+        self.gaussian_bonus = float(kwargs.pop('gaussian_bonus', 0.0))
+        self.gaussian_std = float(kwargs.pop('gaussian_std', 0.5))
         
-        # 2. Pre-initialize SPECTRA Provider
-        self.spectra = SPECTRAProvider(
-            maze_type=self.maze_type, 
-            exp_name=self.exp_name,
-            time_penalty=time_penalty,
-            sparse_bonus=sparse_bonus,
-            success_threshold=success_threshold
-        )
-        self.skill_dim = self.spectra.n_skills
-        
-        # Store im_nu locally to restore it later
         self.im_nu_val = float(kwargs.get('im_nu', 1.0))
+        if 'im_params' not in kwargs:
+            kwargs['im_params'] = {'nu': self.im_nu_val, 'type': 'SPECTRA'}
         
-        # 3. Base Initializations
-        # Note: BaseLearner might set self.im = None and self.im_nu = None
+        # 2. Base Initializations (calls _make_im_modules)
         super().__init__(**kwargs)
         
-        # 4. Restore/Overwrite overwritten attributes for logging and reward calculation
-        self.im = self.spectra
+        # 3. Post-init cleanup
         self.im_nu = self.im_nu_val
-        self.im_lambda = 0.0 # Fix for im_lambda being None
+        self.im_lambda = 0.0
         
         print("GASD Learner initialized with SAC-v2 and SPECTRA {0} Rewards.".format(self.reward_type))
+
+    def _init_spectra_internal(self):
+        """Standardized initialization for the SPECTRA provider."""
+        self.im = SPECTRAProvider(
+            maze_type=self.maze_type, 
+            exp_name=self.exp_name,
+            time_penalty=self.time_penalty,
+            sparse_bonus=self.sparse_bonus,
+            success_threshold=self.success_threshold,
+            gaussian_bonus=self.gaussian_bonus,
+            gaussian_std=self.gaussian_std
+        )
+        self.skill_dim = self.im.n_skills
 
     def create_env(self):
         from agents.maze_agents.toy_maze.env.maze_env import Env
@@ -64,7 +67,15 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         params['n'] = self.ep_len
         return Env(**params)
 
+    def _make_im_modules(self):
+        """Called by BaseLearner during init."""
+        self._init_spectra_internal()
+        return self.im
+
     def _make_agent_modules(self):
+        if not hasattr(self, 'skill_dim'):
+            self._init_spectra_internal()
+            
         skill_n = self.skill_dim
         self.skill_embedding = torch.nn.Embedding(skill_n, skill_n)
         self.skill_embedding.weight.data.copy_(torch.eye(skill_n))
@@ -95,7 +106,7 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
             def get_centroids(self, batch):
                 return self.provider.get_goal_for_skill(batch['skill'])
         
-        vae_bridge = DummyVAE(self.spectra)
+        vae_bridge = DummyVAE(self.im)
         
         return DistanceStochasticAgent(
             env=self.create_env(), 
@@ -127,9 +138,6 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         return []
 
     def get_im_loss(self, batch):
-        """
-        SPECTRA is not a neural network and has no training loss.
-        """
         return torch.tensor(0.0).to(batch['state'].device)
 
     def sample_skill(self):

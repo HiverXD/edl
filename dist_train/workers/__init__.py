@@ -5,6 +5,8 @@
 
 import torch.distributed as dist
 import numpy as np
+import os
+import json
 from dist_train.workers import baseline
 
 episodic_off_policy_manager_lookup = {
@@ -70,57 +72,75 @@ def synchronous_worker(rank, config, settings):
 
     # Run through however many epochs we're supposed to
     # Use tqdm only for rank 0
+    num_epochs = int(settings.dur)
     if rank == 0:
         from tqdm import tqdm
-        total_cycles = int(settings.dur) * config['cycles_per_epoch']
-        pbar = tqdm(range(total_cycles), desc="SPECTRA RL (Rank 00)")
+        # Progress bar now tracks epochs
+        pbar = tqdm(range(num_epochs), desc="SPECTRA RL (Rank 00)", ncols=100, leave=True)
     else:
-        pbar = range(int(settings.dur) * config['cycles_per_epoch'])
+        pbar = range(num_epochs)
 
     last_succ = 0.0
     last_ret = 0.0
     last_alpha = 1.0
 
-    for i in pbar:
-        # One cycle consists of rollouts and (if buffer is ready) updates
-        manager.do_cycle()
-        
-        # Periodic epoch-level logic (evaluation, checkpointing)
-        if (i + 1) % config['cycles_per_epoch'] == 0:
-            manager.curr_epoch += 1
+    for epoch_idx in pbar:
+        # Each epoch consists of multiple cycles
+        for cycle_idx in range(config['cycles_per_epoch']):
+            manager.do_cycle()
             
-            ready = manager.group_is_ready()
-            # Perform evaluation
-            stats, episodes = manager.eval_wrapper()
-            manager.log_eval_results(stats, episodes)
-            
-            # Update metrics for tqdm
-            if len(stats) > 0:
-                mean_stats = np.mean(stats, axis=0)
-                last_succ = mean_stats[0]
-                last_ret = mean_stats[2] # Adjust index based on summary keys
-                if len(mean_stats) > 12:
-                    last_alpha = mean_stats[12]
-            
+            # Optional: Update tqdm postfix inside cycles to show internal progress
             if rank == 0:
-                manager.checkpoint()
-                manager.replay_buffer.profile(0.001)
-            
-            dist.barrier()
-            
-            # Learning rate decay
-            for gp in manager.optim.param_groups:
-                gp['lr'] *= config.get("epoch_lr_decay", 1.0)
+                status = "Training" if manager.group_is_ready() else "Filling Buffer"
+                pbar.set_postfix({
+                    'Cyc': "{}/{}".format(cycle_idx + 1, config['cycles_per_epoch']),
+                    'Stat': status,
+                    'Succ': "{:.2f}".format(last_succ),
+                    'Step': int(manager.agent_model.train_steps.item())
+                })
 
-        # Update tqdm status every cycle
+        # Epoch-level logic (evaluation, checkpointing)
+        manager.curr_epoch += 1
+        
+        # Perform evaluation
+        stats, episodes = manager.eval_wrapper()
+        manager.log_eval_results(stats, episodes)
+        
+        # Update metrics for tqdm
+        if len(stats) > 0:
+            mean_stats = np.mean(stats, axis=0)
+            last_succ = mean_stats[0]
+            last_ret = mean_stats[2]
+            if len(mean_stats) > 12:
+                last_alpha = mean_stats[12]
+            
+            # Log to training_stats.json
+            if rank == 0:
+                stats_file = os.path.join(manager.exp_dir, "training_stats.json")
+                history = []
+                if os.path.exists(stats_file):
+                    with open(stats_file, 'r') as f:
+                        try: history = json.load(f)
+                        except: pass
+                
+                epoch_data = {
+                    'epoch': manager.curr_epoch,
+                    'success_rate': float(last_succ),
+                    'dist_to_goal': float(mean_stats[1]),
+                    'avg_return': float(last_ret),
+                    'alpha': float(last_alpha),
+                    'raw_stats': mean_stats.tolist()
+                }
+                history.append(epoch_data)
+                with open(stats_file, 'w') as f:
+                    json.dump(history, f, indent=4)
+        
         if rank == 0:
-            status = "Training" if manager.group_is_ready() else "Filling Buffer"
-            buf_size = int(manager.replay_buffer.size)
-            steps = int(manager.agent_model.train_steps.item())
-            pbar.set_postfix({
-                'Stat': status,
-                'Succ': "{:.2f}".format(last_succ),
-                'Ret': "{:.1f}".format(last_ret),
-                'Alpha': "{:.4f}".format(last_alpha),
-                'Step': steps
-            })
+            manager.checkpoint()
+            manager.replay_buffer.profile(0.001)
+        
+        dist.barrier()
+        
+        # Learning rate decay
+        for gp in manager.optim.param_groups:
+            gp['lr'] *= config.get("epoch_lr_decay", 1.0)

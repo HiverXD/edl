@@ -56,7 +56,8 @@ class BaseLearner(nn.Module):
             self.im_kwargs = self.im_params.get("model_params", {})
             self.im_learning_rate = self.im_params.get("learning_rate", None)
             self.im = self._make_im_modules()  # This method must return the intrinsic curiosity module
-            assert isinstance(self.im, IntrinsicMotivationModule)
+            if self.im is not None:
+                assert isinstance(self.im, IntrinsicMotivationModule) or hasattr(self.im, 'surprisal')
 
         # Make density modules (does nothing if no density module is specified)
         if self.density_params is None:

@@ -13,20 +13,24 @@ import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from geometry_aware_skill_discovery.laplacian_metric import LaplacianMetricCalculator
+from base.modules.intrinsic_motivation import IntrinsicMotivationModule
 
-class SPECTRAProvider:
+class SPECTRAProvider(IntrinsicMotivationModule):
     """
     Provides Topological PBRS rewards using Laplacian Commute Time Distance.
-    Matches the objective: R(s, s', g) = gamma * Phi(s', g) - Phi(s, g)
-    where Phi(s, g) = -0.5 * CTD(s, g)^2
+    Inherits from IntrinsicMotivationModule for compatibility with the project's RL learners.
     """
     def __init__(self, maze_type, exp_name="curriculum", laplacian_stage="stage_2",
-                 time_penalty=0.0, sparse_bonus=0.0, success_threshold=0.2):
+                 time_penalty=0.0, sparse_bonus=0.0, success_threshold=0.2,
+                 gaussian_bonus=0.0, gaussian_std=0.5):
+        super().__init__()
         self.maze_type = maze_type
         self.exp_name = exp_name
         self.time_penalty = float(time_penalty)
         self.sparse_bonus = float(sparse_bonus)
         self.success_threshold = float(success_threshold)
+        self.gaussian_bonus = float(gaussian_bonus)
+        self.gaussian_std = float(gaussian_std)
         
         # 1. Load Laplacian Calculator
         calc_exp_id = os.path.join(exp_name, laplacian_stage) if exp_name == "curriculum" else exp_name
@@ -44,8 +48,8 @@ class SPECTRAProvider:
         self.centroids_s = data['centroids_s']
         self.n_skills = data['n_clusters']
         
-        print("SPECTRA Reward Provider initialized for {0} (Penalty: {1}, Bonus: {2}).".format(
-            maze_type, self.time_penalty, self.sparse_bonus))
+        print("SPECTRA Reward Provider initialized for {0} (Penalty: {1}, Bonus: {2}, Gauss: {3}).".format(
+            maze_type, self.time_penalty, self.sparse_bonus, self.gaussian_bonus))
 
     def get_goal_for_skill(self, skill_idx):
         """Returns the physical coordinates of the target centroid."""
@@ -74,25 +78,28 @@ class SPECTRAProvider:
             else:
                 reward = phi_next
             
-            # 2. Add Constant Time Penalty
+            # 1. Add Constant Time Penalty
             reward -= self.time_penalty
             
+            # CTD^2 = 2 * |Potential|
+            ctd_sq = torch.abs(phi_next) * 2.0
+            ctd_next = torch.sqrt(ctd_sq)
+            
+            # 2. Add Gaussian Reward (Local guidance)
+            if self.gaussian_bonus > 0:
+                gauss = self.gaussian_bonus * torch.exp(-0.5 * ctd_sq / (self.gaussian_std**2))
+                reward += gauss
+            
             # 3. Add Sparse Success Bonus
-            ctd_next = torch.sqrt(torch.abs(phi_next) * 2.0)
             reached = (ctd_next < self.success_threshold).float()
             reward += reached * self.sparse_bonus
             
         return reward
 
     def surprisal(self, batch, gamma=0.99, reward_type="dynamic"):
-        """
-        Interface compatible with existing EDL Learners.
-        """
+        """Interface compatible with existing EDL Learners."""
         s = batch['state']
         s_next = batch['next_state']
         skill = batch['skill']
-        
-        if skill.dtype != torch.long:
-            skill = skill.long()
-            
+        if skill.dtype != torch.long: skill = skill.long()
         return self.compute_reward(s, s_next, skill, gamma, reward_type=reward_type)

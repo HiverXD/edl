@@ -15,13 +15,6 @@ def create_worker_logger(worker_id, exp_dir, group_id=None):
     logger = logging.getLogger('{:02d}'.format(worker_id))
     logger.setLevel(logging.DEBUG)
 
-    # # create file formatter
-    # log_name = '{}.log'.format(worker_id) if group_id is None else '{}.{}.log'.format(worker_id, group_id)
-    # fh = logging.FileHandler(filename=os.path.join(exp_dir, log_name))
-    # fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(message)s'))
-    # fh.setLevel(logging.DEBUG)
-    # logger.addHandler(fh)
-
     # create console handler
     ch = logging.StreamHandler()
     ch.setFormatter(logging.Formatter('%(name)s - %(message)s'))
@@ -92,10 +85,7 @@ class ReplayBuffer:
                 self.ep_buffer[idx][k] = values[idx]
 
         if verbose:
-            print("\n\nLoaded ReplayBuffer")
-            print("  Path: {}".format(config['buffer_path']))
-            print("  Size: {}".format(self.size))
-            print("\n")
+            print("\nLoaded ReplayBuffer. Path: {0}, Size: {1}".format(config['buffer_path'], self.size))
 
     def reset_profiler(self):
         self.profiler = {
@@ -116,8 +106,6 @@ class ReplayBuffer:
         """Integrate new episodes from the workers into the buffers"""
         self.profiler['time_idle'] += time.time() - self.profiler['last_idle']
         st = time.time()
-        self.ep_buffer[self._pointer] = {}
-        self.opt_count[self._pointer] = 0
         for t in transition_dicts:
             self.ep_buffer[self._pointer] = {k: v.detach() for k, v in t.items()}
             self._pointer += 1
@@ -142,29 +130,16 @@ class ReplayBuffer:
             self.opt_count[i] += 1
 
         if normalize:
-            # Apply normalization to the batch
             batch = self.model.normalize_batch(batch)
 
-        # Profile time statistics
         self.profiler['time_batch'] += time.time() - st
         self.profiler['last_idle'] = time.time()
-
         return batch
 
     def profile(self, time_window=900.):
+        """Profiles performance without printing to keep terminal clean."""
         time_window = float(time_window)
         dur = time.time() - self.profiler['st']
         if dur < time_window:
             return
-
-        print('\nTrainer time expenditure:\n  Syncing: {:5.2f}%,  Batching: {:5.2f}%  Training: {:5.2f}%'.format(
-            100*self.profiler['time_sync']/dur,
-            100*self.profiler['time_batch']/dur,
-            100*self.profiler['time_idle']/dur,
-        ), flush=True)
-        # print('Average buffer size: {:7.1f}'.format(np.mean(self.profiler['size'])), flush=True)
-        # print('Average episode use: {:7.1f}'.format(np.mean(self.profiler['opts'])), flush=True)
-        # print(' ', flush=True)
-        print('Current buffer size: {:7.1f}\n'.format(self.size), flush=True)
-
         self.reset_profiler()
