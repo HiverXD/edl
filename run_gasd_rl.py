@@ -71,6 +71,7 @@ def run_rl_training():
         "cycles_per_epoch": 10,
         "env_steps_per_cycle": 100,
         "gradient_steps_per_cycle": 50,
+        "logging_keys": common.get('logging_keys', []), # Pass logging keys
         "agent_params": agent_params
     }
     
