@@ -4,6 +4,7 @@
 # For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
 
 import torch
+import numpy as np
 from base.learners.base import BaseLearner
 
 
@@ -203,7 +204,8 @@ def sac_v2_decorator(partial_agent_class):
             # 1. Automatic Alpha Tuning Setup
             if target_entropy is None:
                 # Target entropy = -|A| (Standard for continuous action spaces)
-                self.target_entropy = -float(np.prod(self._dummy_env.action_space.shape))
+                # Use action_size instead of action_space for this environment
+                self.target_entropy = -float(self._dummy_env.action_size)
             else:
                 self.target_entropy = float(target_entropy)
 

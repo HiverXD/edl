@@ -1,6 +1,6 @@
 # Curriculum Training Configuration for Laplacian Encoder
 experiment:
-  maze_type: "square_bottleneck"
+  maze_type: "square_a"
   exp_name: "curriculum"
   dim: 10
   hidden_dim: 256
@@ -31,13 +31,30 @@ stages:
       resume: true
 
 vqvae:
-  mode: "identity"  # identity, commute, diffusion
-  num_samples: 50000 # Number of continuous samples for discovery
+  mode: "commute"
+  num_samples: 50000 
   log_dir: "logs/vqvae"
   hidden_size: 128
-  codebook_size: 10 # Number of skills (K)
-  code_size: 16     # Latent dimension (D)
-  learning_rate: 0.0001
-  batch_size: 2048
-  epochs: 5000
+  codebook_size: 10 
+  code_size: 16     
+  learning_rate: 0.001
+  batch_size: 1024
+  epochs: 500
   normalize_inputs: false
+
+rl:
+  reward_type: "dynamic"
+  pbrs_gamma: 0.99
+  gamma: 0.99
+  learning_rate: 0.0003
+  batch_size: 256
+  hidden_size: 256
+  num_layers: 3
+  polyak: 0.995
+  log_dir: "logs/rl"
+  dur: 10 # Number of epochs
+  num_workers: 1
+  # --- New Reward Refinements ---
+  time_penalty: 0.1      # Constant cost per step
+  sparse_bonus: 5.0      # Large reward on reaching goal
+  success_threshold: 0.2 # CTD distance to consider as success
