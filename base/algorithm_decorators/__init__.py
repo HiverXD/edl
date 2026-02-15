@@ -10,6 +10,7 @@ dec_lookup = {
     'dqn': off_policy.dqn_decorator,
     'ddpg': off_policy.ddpg_decorator,
     'sac': off_policy.sac_decorator,
+    'sac_v2': off_policy.sac_v2_decorator,
 }
 
 def decorate(learner, algorithm):

@@ -111,6 +111,21 @@ def main():
     save_path = os.path.join(save_dir, "clustering_comparison.png")
     plt.savefig(save_path)
     print("\n[Done] Visualization saved to {0}".format(save_path))
+    
+    # Save Intent Centroids (Method 3: Weighted Bisecting) for Reward Function
+    centroids_data = {
+        'maze_type': maze_type,
+        'n_clusters': args.n_clusters,
+        'centroids_psi': centers_psi_wb, # Embedding space goals
+        'centroids_s': centers_s_wb,     # Physical space goals (for reference)
+        'method': 'Weighted Bisecting'
+    }
+    centroids_path = os.path.join(save_dir, "intent_centroids.pkl")
+    import pickle
+    with open(centroids_path, 'wb') as f:
+        pickle.dump(centroids_data, f)
+    print("[Done] Intent centroids saved to {0}".format(centroids_path))
+    
     plt.show()
 
 if __name__ == "__main__":

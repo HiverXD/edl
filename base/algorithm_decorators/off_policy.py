@@ -179,3 +179,111 @@ def sac_decorator(partial_agent_class):
             return loss
 
     return SACLearner
+
+
+def sac_v2_decorator(partial_agent_class):
+    """
+    Modern SAC-v2 Decorator (Standard since 2019/2020).
+    Compatible with PyTorch 1.2.0.
+    Features:
+        - No V(s) network (Twin Q only).
+        - Automatic Entropy Tuning (Learnable Alpha).
+        - Twin Q-target calculation using next-state policy sampling.
+    """
+    assert issubclass(partial_agent_class, BaseLearner)
+
+    class SACV2Learner(partial_agent_class):
+        def __init__(self, target_entropy=None, polyak=0.995, **kwargs):
+            # In SAC-v2, polyak (tau) is typically 0.005, 
+            # meaning target = target * 0.995 + current * 0.005
+            self.polyak = float(polyak)
+            
+            super().__init__(**kwargs)
+
+            # 1. Automatic Alpha Tuning Setup
+            if target_entropy is None:
+                # Target entropy = -|A| (Standard for continuous action spaces)
+                self.target_entropy = -float(np.prod(self._dummy_env.action_space.shape))
+            else:
+                self.target_entropy = float(target_entropy)
+
+            # Learnable log_alpha (initialized to 0.0 -> alpha = 1.0)
+            self.log_alpha = torch.nn.Parameter(torch.zeros(1))
+            
+            # 2. Update ep_summary_keys (Replace v_loss with alpha metrics)
+            # Find and remove v_loss if it exists from parent, then add v2 specific keys
+            self.ep_summary_keys = [k for k in self.ep_summary_keys if k != 'v_loss']
+            self.ep_summary_keys += ["avg_batch_rew", "avg_q1", "avg_q2", "q1_loss", "q2_loss", "p_loss", "alpha_loss", "alpha"]
+
+        @property
+        def alpha(self):
+            return self.log_alpha.exp()
+
+        def forward(self, mini_batch):
+            # --- 1. Q-Target Calculation (Standard SAC-v2 style) ---
+            with torch.no_grad():
+                # Sample next actions from current policy for next_state
+                next_actions, next_log_probs = self.sample_policy_actions_and_lprobs(mini_batch, state_key='next_state')
+                
+                # Get Target Q values
+                q1_targ = self.get_next_qs(mini_batch, new_actions=next_actions, q_i=1)
+                q2_targ = self.get_next_qs(mini_batch, new_actions=next_actions, q_i=2)
+                
+                # min(Q1, Q2) - alpha * log_pi
+                q_targ_min = torch.min(q1_targ, q2_targ) - self.alpha * next_log_probs
+                
+                # SAC-v2 Bellman Equation (Standard Terminal logic)
+                if self.bootstrap_from_early_terminal:
+                    q_targ = mini_batch['reward'] + ((1 - mini_batch['complete']) * self.gamma * q_targ_min)
+                else:
+                    q_targ = mini_batch['reward'] + ((1 - mini_batch['terminal']) * self.gamma * q_targ_min)
+
+            # --- 2. Critic Update (Twin Q) ---
+            q1 = self.get_action_qs(mini_batch, q_i=1)
+            q2 = self.get_action_qs(mini_batch, q_i=2)
+            
+            q1_loss = torch.pow(q1 - q_targ.detach(), 2).mean()
+            q2_loss = torch.pow(q2 - q_targ.detach(), 2).mean()
+            critic_loss = q1_loss + q2_loss
+
+            # --- 3. Actor Update ---
+            # Sample current actions
+            curr_actions, curr_log_probs = self.sample_policy_actions_and_lprobs(mini_batch, state_key='state')
+            
+            # Get Q values for current actions (no grad for Q)
+            q1_new = self.get_curr_qs(mini_batch, new_actions=curr_actions, q_i=1)
+            q2_new = self.get_curr_qs(mini_batch, new_actions=curr_actions, q_i=2)
+            q_new_min = torch.min(q1_new, q2_new)
+            
+            # Actor objective: alpha * log_pi - Q
+            p_loss = (self.alpha.detach() * curr_log_probs - q_new_min).mean()
+
+            # --- 4. Alpha Update (Auto-tuning) ---
+            # log_alpha loss = -alpha * (log_pi + target_entropy)
+            alpha_loss = -(self.log_alpha * (curr_log_probs + self.target_entropy).detach()).mean()
+
+            # 5. Bookkeeping
+            self.fill_summary(mini_batch['reward'].mean(), q1.mean(), q2.mean(), 
+                              q1_loss, q2_loss, p_loss, alpha_loss, self.alpha)
+
+            # Total loss for backprop
+            total_loss = critic_loss + p_loss + alpha_loss
+            
+            if self.im is not None:
+                total_loss += (self.im_lambda * self.get_im_loss(mini_batch))
+
+            return total_loss
+
+        def sample_policy_actions_and_lprobs(self, batch, state_key='state'):
+            """
+            Helper to sample actions from policy.
+            Note: PyTorch 1.2.0 doesn't support complex keyword redirection easily, 
+            so we handle state_key explicitly.
+            """
+            action, action_logit, lprobs, n_ent = self.policy(
+                batch[state_key],
+                self.preprocess_skill(batch['skill'])
+            )
+            return action, lprobs.sum(dim=1)
+
+    return SACV2Learner

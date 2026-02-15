@@ -53,3 +53,6 @@ add_to_learners(Learner, 'ppo')
 
 from .skill_discovery.edl import EDLSiblingRivalryLearner as Learner
 add_to_learners(Learner, 'ppo')
+
+from base.learners.skill_discovery.gasd import GASDSACV2Learner as Learner
+add_to_learners(Learner, 'sac_v2')
