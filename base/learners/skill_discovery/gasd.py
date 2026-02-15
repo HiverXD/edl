@@ -28,11 +28,13 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         self.pbrs_gamma = float(kwargs.pop('pbrs_gamma', 0.99))
         self.reward_type = str(kwargs.pop('reward_type', 'dynamic')).lower()
         
+        # New reward refinements
         self.time_penalty = float(kwargs.pop('time_penalty', 0.0))
         self.sparse_bonus = float(kwargs.pop('sparse_bonus', 0.0))
         self.success_threshold = float(kwargs.pop('success_threshold', 0.2))
         self.gaussian_bonus = float(kwargs.pop('gaussian_bonus', 0.0))
         self.gaussian_std = float(kwargs.pop('gaussian_std', 0.5))
+        self.reward_scale = float(kwargs.pop('reward_scale', 1.0))
         
         self.im_nu_val = float(kwargs.get('im_nu', 1.0))
         if 'im_params' not in kwargs:
@@ -45,7 +47,8 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         self.im_nu = self.im_nu_val
         self.im_lambda = 0.0
         
-        print("GASD Learner initialized with SAC-v2 and SPECTRA {0} Rewards.".format(self.reward_type))
+        print("GASD Learner initialized with SAC-v2 and SPECTRA {0} Rewards (Scale: {1}).".format(
+            self.reward_type, self.reward_scale))
 
     def _init_spectra_internal(self):
         """Standardized initialization for the SPECTRA provider."""
@@ -56,7 +59,8 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
             sparse_bonus=self.sparse_bonus,
             success_threshold=self.success_threshold,
             gaussian_bonus=self.gaussian_bonus,
-            gaussian_std=self.gaussian_std
+            gaussian_std=self.gaussian_std,
+            reward_scale=self.reward_scale
         )
         self.skill_dim = self.im.n_skills
 
@@ -68,7 +72,6 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         return Env(**params)
 
     def _make_im_modules(self):
-        """Called by BaseLearner during init."""
         self._init_spectra_internal()
         return self.im
 
@@ -101,6 +104,9 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
     def _make_agent(self):
         from agents.maze_agents.toy_maze.skill_discovery.edl import DistanceStochasticAgent
         
+        if self.im is None:
+            self._init_spectra_internal()
+            
         class DummyVAE:
             def __init__(self, provider): self.provider = provider
             def get_centroids(self, batch):

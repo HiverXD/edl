@@ -55,8 +55,9 @@ rl:
   dur: 1000
   num_workers: 1
   # --- Reward Refinements ---
-  time_penalty: 0.1      
-  sparse_bonus: 5.0      
+  reward_scale: 0.001     # Global scale to bring -3000 to -3
+  time_penalty: 0.01      
+  sparse_bonus: 10.0      
   success_threshold: 0.2 
-  gaussian_bonus: 2.0    # Amplitude (A)
-  gaussian_std: 0.5      # Width (sigma)
+  gaussian_bonus: 2.0    
+  gaussian_std: 0.5      

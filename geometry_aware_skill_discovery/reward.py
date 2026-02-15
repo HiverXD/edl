@@ -22,7 +22,7 @@ class SPECTRAProvider(IntrinsicMotivationModule):
     """
     def __init__(self, maze_type, exp_name="curriculum", laplacian_stage="stage_2",
                  time_penalty=0.0, sparse_bonus=0.0, success_threshold=0.2,
-                 gaussian_bonus=0.0, gaussian_std=0.5):
+                 gaussian_bonus=0.0, gaussian_std=0.5, reward_scale=1.0):
         super().__init__()
         self.maze_type = maze_type
         self.exp_name = exp_name
@@ -31,6 +31,7 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         self.success_threshold = float(success_threshold)
         self.gaussian_bonus = float(gaussian_bonus)
         self.gaussian_std = float(gaussian_std)
+        self.reward_scale = float(reward_scale)
         
         # 1. Load Laplacian Calculator
         calc_exp_id = os.path.join(exp_name, laplacian_stage) if exp_name == "curriculum" else exp_name
@@ -48,8 +49,8 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         self.centroids_s = data['centroids_s']
         self.n_skills = data['n_clusters']
         
-        print("SPECTRA Reward Provider initialized for {0} (Penalty: {1}, Bonus: {2}, Gauss: {3}).".format(
-            maze_type, self.time_penalty, self.sparse_bonus, self.gaussian_bonus))
+        print("SPECTRA Reward Provider initialized for {0} (Scale: {1}, Bonus: {2}).".format(
+            maze_type, self.reward_scale, self.sparse_bonus))
 
     def get_goal_for_skill(self, skill_idx):
         """Returns the physical coordinates of the target centroid."""
@@ -58,14 +59,16 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         return self.centroids_s[skill_idx]
 
     def compute_potential(self, s, skill_idx):
-        """Calculates Phi(s, g) = -0.5 * ||psi(s) - psi(g)||^2"""
+        """Calculates Phi(s, g) = reward_scale * -0.5 * ||psi(s) - psi(g)||^2"""
         psi_s = self.calc.transform_space(s, mode="commute")
         if not torch.is_tensor(psi_s):
             psi_s = torch.from_numpy(psi_s).float()
         
         psi_g = self.centroids_psi[skill_idx]
         dist_sq = torch.sum((psi_s - psi_g).pow(2), dim=1)
-        return -0.5 * dist_sq
+        
+        # Apply global scaling to prevent numerical instability
+        return -0.5 * dist_sq * self.reward_scale
 
     def compute_reward(self, s, s_next, skill_idx, gamma, reward_type="dynamic"):
         """Calculates SPECTRA Reward with refinements."""
