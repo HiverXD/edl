@@ -10,7 +10,7 @@ import pickle
 
 # Add project root to path
 import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 
 from geometry_aware_skill_discovery.laplacian_metric import LaplacianMetricCalculator
 from base.modules.intrinsic_motivation import IntrinsicMotivationModule
@@ -18,12 +18,11 @@ from base.modules.intrinsic_motivation import IntrinsicMotivationModule
 class SPECTRAProvider(IntrinsicMotivationModule):
     """
     Provides Topological PBRS rewards using Laplacian Commute Time Distance.
-    Inherits from IntrinsicMotivationModule for compatibility with the project's RL learners.
     """
     def __init__(self, maze_type, exp_name="curriculum", laplacian_stage="stage_2",
                  time_penalty=0.0, sparse_bonus=0.0, success_threshold=0.2,
                  gaussian_bonus=0.0, gaussian_std=0.5, reward_scale=1.0):
-        super().__init__()
+        super(SPECTRAProvider, self).__init__()
         self.maze_type = maze_type
         self.exp_name = exp_name
         self.time_penalty = float(time_penalty)
@@ -32,6 +31,9 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         self.gaussian_bonus = float(gaussian_bonus)
         self.gaussian_std = float(gaussian_std)
         self.reward_scale = float(reward_scale)
+        
+        # Latest breakdown stats for logging
+        self._last_breakdown = {}
         
         # 1. Load Laplacian Calculator
         calc_exp_id = os.path.join(exp_name, laplacian_stage) if exp_name == "curriculum" else exp_name
@@ -53,21 +55,17 @@ class SPECTRAProvider(IntrinsicMotivationModule):
             maze_type, self.reward_scale, self.sparse_bonus))
 
     def get_goal_for_skill(self, skill_idx):
-        """Returns the physical coordinates of the target centroid."""
         if torch.is_tensor(skill_idx):
             return torch.from_numpy(self.centroids_s[skill_idx.cpu().numpy()]).float()
         return self.centroids_s[skill_idx]
 
     def compute_potential(self, s, skill_idx):
-        """Calculates Phi(s, g) = reward_scale * -0.5 * ||psi(s) - psi(g)||^2"""
         psi_s = self.calc.transform_space(s, mode="commute")
         if not torch.is_tensor(psi_s):
             psi_s = torch.from_numpy(psi_s).float()
         
         psi_g = self.centroids_psi[skill_idx]
         dist_sq = torch.sum((psi_s - psi_g).pow(2), dim=1)
-        
-        # Apply global scaling to prevent numerical instability
         return -0.5 * dist_sq * self.reward_scale
 
     def compute_reward(self, s, s_next, skill_idx, gamma, reward_type="dynamic"):
@@ -77,30 +75,43 @@ class SPECTRAProvider(IntrinsicMotivationModule):
             
             if reward_type == "dynamic":
                 phi_curr = self.compute_potential(s, skill_idx)
-                reward = gamma * phi_next - phi_curr
+                pbrs_rew = gamma * phi_next - phi_curr
             else:
-                reward = phi_next
+                pbrs_rew = phi_next
             
-            # 1. Add Constant Time Penalty
-            reward -= self.time_penalty
+            penalty = -torch.ones_like(phi_next) * self.time_penalty
             
-            # CTD^2 = 2 * |Potential|
-            ctd_sq = torch.abs(phi_next) * 2.0
-            ctd_next = torch.sqrt(ctd_sq)
+            # CTD^2 = 2 * |Potential| / reward_scale
+            ctd_sq = torch.abs(phi_next) * 2.0 / (self.reward_scale + 1e-8)
             
-            # 2. Add Gaussian Reward (Local guidance)
+            # 1. Gaussian Reward (Topological guidance using CTD)
+            gauss = torch.zeros_like(phi_next)
             if self.gaussian_bonus > 0:
                 gauss = self.gaussian_bonus * torch.exp(-0.5 * ctd_sq / (self.gaussian_std**2))
-                reward += gauss
             
-            # 3. Add Sparse Success Bonus
-            reached = (ctd_next < self.success_threshold).float()
-            reward += reached * self.sparse_bonus
+            # 2. Sparse Success Bonus (Physical distance check)
+            # Get physical goal coordinates
+            g_phys = self.get_goal_for_skill(skill_idx).to(s_next.device)
+            # Calculate Euclidean distance in state space
+            dist_phys = torch.norm(s_next - g_phys, dim=1)
             
-        return reward
+            reached = (dist_phys < self.success_threshold).float()
+            bonus = reached * self.sparse_bonus
+            
+            total_reward = pbrs_rew + penalty + gauss + bonus
+            
+            # Store breakdown for logging
+            self._last_breakdown = {
+                'potential': pbrs_rew.mean().item(),
+                'penalty': penalty.mean().item(),
+                'gauss': gauss.mean().item(),
+                'bonus': bonus.mean().item()
+            }
+            
+        return total_reward
 
     def surprisal(self, batch, gamma=0.99, reward_type="dynamic"):
-        """Interface compatible with existing EDL Learners."""
+        """Returns single tensor for compatibility."""
         s = batch['state']
         s_next = batch['next_state']
         skill = batch['skill']

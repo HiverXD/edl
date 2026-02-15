@@ -1,4 +1,4 @@
-# Curriculum Training Configuration for Laplacian Encoder
+# Curriculum Training Configuration for SPECTRA
 experiment:
   maze_type: "square_a"
   exp_name: "curriculum"
@@ -8,29 +8,14 @@ experiment:
 stages:
   - id: 1
     name: "coarse_skeleton"
-    generation:
-      grid_size: 0.5
-      get_skeleton: true
-      use_random_walk: true
-      num_episodes: 400
-    training:
-      epochs: 300
-      lr: 0.001
-      resume: false
-
+    generation: {grid_size: 0.5, get_skeleton: true, use_random_walk: true, num_episodes: 400}
+    training: {epochs: 300, lr: 0.001, resume: false}
   - id: 2
     name: "fine_grid"
-    generation:
-      grid_size: 0.25
-      get_skeleton: false
-      use_random_walk: true
-      num_episodes: 800
-    training:
-      additional_epochs: 200
-      lr: 0.001
-      resume: true
+    generation: {grid_size: 0.25, get_skeleton: false, use_random_walk: true, num_episodes: 800}
+    training: {additional_epochs: 200, lr: 0.001, resume: true}
 
-vqvae:
+vqvae: # (VQ-VAE logic kept for ablation)
   mode: "commute"
   num_samples: 50000 
   log_dir: "logs/vqvae"
@@ -43,21 +28,26 @@ vqvae:
   normalize_inputs: false
 
 rl:
-  reward_type: "dynamic"
-  pbrs_gamma: 0.99
-  gamma: 0.99
-  learning_rate: 0.0003
-  batch_size: 256
-  hidden_size: 256
-  num_layers: 3
-  polyak: 0.995
-  log_dir: "logs/rl"
-  dur: 1000
-  num_workers: 1
-  # --- Reward Refinements ---
-  reward_scale: 0.001     # Global scale to bring -3000 to -3
-  time_penalty: 0.01      
-  sparse_bonus: 10.0      
-  success_threshold: 0.2 
-  gaussian_bonus: 2.0    
-  gaussian_std: 0.5      
+  common: # Shared parameters
+    gamma: 0.99
+    learning_rate: 0.0003
+    batch_size: 256
+    hidden_size: 256
+    num_layers: 3
+    polyak: 0.995
+    dur: 50 # Reduced epochs for debugging
+    num_workers: 1
+    log_dir: "logs/rl"
+    sparse_bonus: 20.0      
+    success_threshold: 0.2 
+    gaussian_bonus: 2.0    
+    gaussian_std: 0.5      
+
+  static: # Specific to reward_type: static
+    reward_scale: 0.001      # Stronger signal for static distance
+    time_penalty: 0.01     # Gentle penalty
+
+  dynamic: # Specific to reward_type: dynamic (PBRS)
+    reward_scale: 1.0      # PBRS needs larger scale to have meaningful delta
+    time_penalty: 0.05     # Medium penalty
+    pbrs_gamma: 0.99

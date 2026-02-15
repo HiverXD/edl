@@ -123,14 +123,16 @@ def synchronous_worker(rank, config, settings):
                         try: history = json.load(f)
                         except: pass
                 
-                epoch_data = {
-                    'epoch': manager.curr_epoch,
-                    'success_rate': float(last_succ),
-                    'dist_to_goal': float(mean_stats[1]),
-                    'avg_return': float(last_ret),
-                    'alpha': float(last_alpha),
-                    'raw_stats': mean_stats.tolist()
-                }
+                # Map all metrics by name for absolute clarity
+                epoch_data = {'epoch': manager.curr_epoch}
+                for idx, key in enumerate(manager.agent_model.ep_summary_keys):
+                    if idx < len(mean_stats):
+                        epoch_data[key] = float(mean_stats[idx])
+                
+                # Redundant keys for tqdm compatibility
+                epoch_data['success_rate'] = epoch_data.get('success', 0.0)
+                epoch_data['avg_return'] = epoch_data.get('cum_rew_total', 0.0)
+                
                 history.append(epoch_data)
                 with open(stats_file, 'w') as f:
                     json.dump(history, f, indent=4)
