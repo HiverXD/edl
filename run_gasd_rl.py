@@ -49,6 +49,7 @@ def run_rl_training():
         "hidden_size": common['hidden_size'],
         "num_layers": common['num_layers'],
         "polyak": common['polyak'],
+        "target_entropy": common.get('target_entropy', None), # Add this
         "normalize_inputs": False,
         "env_reward": False,
         "sparse_bonus": common.get('sparse_bonus', 0.0),
