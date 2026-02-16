@@ -252,7 +252,10 @@ def sac_v2_decorator(partial_agent_class):
             # Sample current actions
             curr_actions, curr_log_probs = self.sample_policy_actions_and_lprobs(mini_batch, state_key='state')
             
-            # Get Q values for current actions (no grad for Q)
+            # CRITICAL: Freeze Critics to ensure ONLY Policy learns from this loss
+            for p in self.q1.parameters(): p.requires_grad = False
+            for p in self.q2.parameters(): p.requires_grad = False
+            
             q1_new = self.get_curr_qs(mini_batch, new_actions=curr_actions, q_i=1)
             q2_new = self.get_curr_qs(mini_batch, new_actions=curr_actions, q_i=2)
             q_new_min = torch.min(q1_new, q2_new)
@@ -261,7 +264,6 @@ def sac_v2_decorator(partial_agent_class):
             p_loss = (self.alpha.detach() * curr_log_probs - q_new_min).mean()
 
             # --- 4. Alpha Update (Auto-tuning) ---
-            # log_alpha loss = -alpha * (log_pi + target_entropy)
             alpha_loss = -(self.log_alpha * (curr_log_probs + self.target_entropy).detach()).mean()
 
             # 5. Bookkeeping
@@ -270,6 +272,12 @@ def sac_v2_decorator(partial_agent_class):
 
             # Total loss for backprop
             total_loss = critic_loss + p_loss + alpha_loss
+            
+            # UNFREEZE Critics for the next step/iteration
+            # Note: total_loss.backward() will be called AFTER this return by the trainer.
+            # PyTorch 1.2.0 will still respect the grad requirement at the time of forward pass.
+            for p in self.q1.parameters(): p.requires_grad = True
+            for p in self.q2.parameters(): p.requires_grad = True
             
             if self.im is not None:
                 total_loss += (self.im_lambda * self.get_im_loss(mini_batch))

@@ -8,6 +8,7 @@ import json
 import torch
 import numpy as np
 import collections
+import yaml
 
 # Add project root to path for loading LaplacianEncoder
 import sys
@@ -62,9 +63,19 @@ class LaplacianMetricCalculator:
         print("Loaded Laplacian Metric Calculator for {0}/{1}".format(maze_type, exp_name))
         print("Sorted Eigenvalues: {0}".format(np.round(self.eigenvalues, 4)))
 
+        # 4. Load Metadata (Optional Global Normalization)
+        self.global_std_val = 1.0
+        meta_path = os.path.join(exp_path, "meta_data.yaml")
+        if os.path.exists(meta_path):
+            with open(meta_path, 'r') as f:
+                meta = yaml.load(f)
+                self.global_std_val = float(meta['normalization'].get('global_psi_std', 1.0))
+            print("Applying Global Normalization (Std: {0:.4f})".format(self.global_std_val))
+
     def encode_sorted(self, states):
         """
         Encodes states and returns eigenvectors sorted by eigenvalue magnitude.
+        Now normalized by global_std_val.
         """
         if not isinstance(states, torch.Tensor):
             states = torch.tensor(states, dtype=torch.float32)
@@ -73,40 +84,37 @@ class LaplacianMetricCalculator:
         if len(states.shape) == 1:
             states = states.unsqueeze(0)
             
-        with torch.no_grad():
-            # Apply normalization
-            states_norm = (states - self.mean) / self.std
-            phi = self.model(states_norm)
-            
-            # Reorder dimensions to match sorted eigenvalues
-            phi_sorted = phi[:, self.sort_indices]
-            
-        return phi_sorted
+        # Apply normalization
+        states_norm = (states - self.mean.to(states.device)) / self.std.to(states.device)
+        phi = self.model(states_norm)
+        
+        # Reorder dimensions to match sorted eigenvalues
+        phi_sorted = phi[:, self.sort_indices]
+        
+        # Apply Global Scaling
+        return phi_sorted / self.global_std_val
 
     def transform_space(self, states, mode="truncated", **kwargs):
         """
         Transforms coordinates into different Laplacian-weighted vector spaces.
-        
-        Args:
-            states: (N, 2) or (2,) state coordinates.
-            mode: "truncated", "commute", or "diffusion"
-            kwargs: t for diffusion
         """
-        phi_sorted = self.encode_sorted(states).numpy() # (N, D)
+        phi_sorted = self.encode_sorted(states)
         
+        # Convert eigenvalues to match device
+        device = phi_sorted.device
+        safe_ev = torch.from_numpy(self.safe_eigenvalues).float().to(device)
+        ev = torch.from_numpy(self.eigenvalues).float().to(device)
+
         if mode == "truncated":
-            # Just the raw eigenvectors sorted by eigenvalue
             return phi_sorted
             
         elif mode == "commute":
-            # Weigh by 1/sqrt(lambda) so that L2 distance matches Resistance distance
-            weights = 1.0 / np.sqrt(self.safe_eigenvalues)
+            weights = 1.0 / torch.sqrt(safe_ev)
             return phi_sorted * weights
             
         elif mode == "diffusion":
-            # Weigh by e^(-lambda * t) so that L2 distance matches Diffusion distance
             t = kwargs.get('t', 1.0)
-            weights = np.exp(-self.eigenvalues * t)
+            weights = torch.exp(-ev * t)
             return phi_sorted * weights
             
         else:

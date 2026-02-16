@@ -22,11 +22,17 @@ class SpectralKMeansManager:
         self.calc = calc
         self.n_clusters = n_clusters
         
+    def _to_numpy(self, data):
+        if torch.is_tensor(data):
+            return data.detach().cpu().numpy()
+        return data
+
     def get_kde_weights(self, data, bandwidth=0.1):
         """
         Calculates weights as 1/density using Kernel Density Estimation.
         """
         print("Calculating KDE weights...")
+        data = self._to_numpy(data)
         kde = KernelDensity(kernel='gaussian', bandwidth=bandwidth).fit(data)
         log_density = kde.score_samples(data)
         density = np.exp(log_density)
@@ -43,6 +49,7 @@ class SpectralKMeansManager:
         Splits the cluster with largest inertia into two until n_clusters is reached.
         """
         print("Running Bisecting K-means (Weighted: {0})...".format(weights is not None))
+        data = self._to_numpy(data)
         
         # Start with all data in one cluster
         clusters = [np.arange(len(data))]
@@ -97,18 +104,21 @@ class SpectralKMeansManager:
         Standard K-means with KDE weights.
         """
         print("Running Weighted K-means...")
-        km = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42)
-        km.fit(data, sample_weight=weights)
-        
+        data = self._to_numpy(data)
+        km = KMeans(n_clusters=self.n_clusters, n_init=10, random_state=42).fit(data, sample_weight=weights)
         return km.labels_, km.cluster_centers_
 
-    def get_centroids_in_state_space(self, data_psi, data_s, centroids_psi):
+    def get_centroids_in_state_space(self, psi_full, s_full, centers_psi):
         """
-        Finds the nearest neighbor in actual state space for each psi-space centroid.
+        Finds the closest physical state for each embedding centroid.
         """
-        centroids_s = []
-        for c_psi in centroids_psi:
-            dists = np.linalg.norm(data_psi - c_psi, axis=1)
-            nn_idx = np.argmin(dists)
-            centroids_s.append(data_s[nn_idx])
-        return np.array(centroids_s)
+        psi_full = self._to_numpy(psi_full)
+        s_full = self._to_numpy(s_full)
+        centers_psi = self._to_numpy(centers_psi)
+        
+        centers_s = []
+        for cp in centers_psi:
+            dists = np.sum((psi_full - cp)**2, axis=1)
+            idx = np.argmin(dists)
+            centers_s.append(s_full[idx])
+        return np.array(centers_s)

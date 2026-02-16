@@ -69,8 +69,11 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         return -0.5 * dist_sq * self.reward_scale
 
     def compute_reward(self, s, s_next, skill_idx, gamma, reward_type="dynamic"):
-        """Calculates SPECTRA Reward with refinements."""
+        """
+        Calculates SPECTRA Reward with refinements.
+        """
         with torch.no_grad():
+            # 1. Potential-based components (Scale-dependent)
             phi_next = self.compute_potential(s_next, skill_idx)
             
             if reward_type == "dynamic":
@@ -79,20 +82,25 @@ class SPECTRAProvider(IntrinsicMotivationModule):
             else:
                 pbrs_rew = phi_next
             
+            # 2. Distance-based components (Scale-independent)
+            # Calculate raw CTD square directly in psi space
+            psi_s_next = self.calc.transform_space(s_next, mode="commute")
+            if not torch.is_tensor(psi_s_next):
+                psi_s_next = torch.from_numpy(psi_s_next).float().to(s_next.device)
+            
+            psi_g = self.centroids_psi[skill_idx].to(s_next.device)
+            raw_ctd_sq = torch.sum((psi_s_next - psi_g).pow(2), dim=1)
+            
+            # Constant Time Penalty
             penalty = -torch.ones_like(phi_next) * self.time_penalty
             
-            # CTD^2 = 2 * |Potential| / reward_scale
-            ctd_sq = torch.abs(phi_next) * 2.0 / (self.reward_scale + 1e-8)
-            
-            # 1. Gaussian Reward (Topological guidance using CTD)
+            # Gaussian Reward (Using raw CTD directly)
             gauss = torch.zeros_like(phi_next)
             if self.gaussian_bonus > 0:
-                gauss = self.gaussian_bonus * torch.exp(-0.5 * ctd_sq / (self.gaussian_std**2))
+                gauss = self.gaussian_bonus * torch.exp(-0.5 * raw_ctd_sq / (self.gaussian_std**2))
             
-            # 2. Sparse Success Bonus (Physical distance check)
-            # Get physical goal coordinates
+            # Sparse Success Bonus (Physical distance check)
             g_phys = self.get_goal_for_skill(skill_idx).to(s_next.device)
-            # Calculate Euclidean distance in state space
             dist_phys = torch.norm(s_next - g_phys, dim=1)
             
             reached = (dist_phys < self.success_threshold).float()

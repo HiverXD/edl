@@ -47,6 +47,10 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
         if 'im_params' not in kwargs:
             kwargs['im_params'] = {'nu': self.im_nu_val, 'type': 'SPECTRA'}
         
+        # Clean up remaining training-specific keys that parent classes don't like
+        for k in ['dur', 'num_workers', 'log_dir', 'learning_rate', 'batch_size', 'polyak']:
+            kwargs.pop(k, None)
+
         super(GASDSACV2Learner, self).__init__(**kwargs)
         
         self.ep_summary_keys = self.master_keys
@@ -69,30 +73,42 @@ class GASDSACV2Learner(BaseSACV2Learner, BaseEDLLearner):
     def relabel_episode(self):
         """
         Manually relabel the current episode with SPECTRA rewards and record distances.
+        [DEBUG] Now dumps step-wise details to inspector_log.json.
         """
         self._compress_me = []
         ep = self.agent.episode
-        self.distance = [] # Reset for current ep
+        self.distance = []
         
-        # Convert episode to batch for vector processing
         batched = {key: torch.stack([e[key] for e in ep]) for key in ep[0].keys()}
         
         with torch.no_grad():
             total_rewards = self.im.surprisal(batched, gamma=self.pbrs_gamma, reward_type=self.reward_type)
             breakdown = self.im._last_breakdown
             
-        # Update each transition and record distances
+        step_logs = []
         for i, e in enumerate(ep):
             spectra_r = total_rewards[i].item()
             e['reward'] = torch.tensor(spectra_r * self.im_nu)
             e['im_reward'] = torch.tensor(spectra_r)
             e['env_reward'] = torch.tensor(0.0)
             
-            # Record distance to goal for logging
-            d = self._dummy_env.dist(e['next_state'], e['goal']).item()
-            self.distance.append(d)
+            d_phys = self._dummy_env.dist(e['next_state'], e['goal']).item()
+            self.distance.append(d_phys)
             
-        # Capture breakdown mean for this specific episode summary
+            # [DEBUG LOGGING]
+            step_logs.append({
+                'step': i,
+                'dist_phys': d_phys,
+                'reward_total': spectra_r,
+                'phi': breakdown.get('potential_raw_mean', 0.0), # Approximate
+                'bonus': e.get('rew_bon', 0.0)
+            })
+            
+        # Write to a persistent debug file
+        debug_path = os.path.join(getattr(self, 'exp_dir', 'logs'), "inspector_step_log.json")
+        with open(debug_path, 'w') as f:
+            json.dump(step_logs, f, indent=4)
+            
         self._current_ep_breakdown = breakdown
         self._compress_me.append(ep)
 
