@@ -103,7 +103,19 @@ class EDLLearner(BaseEDLLearner):
 
     def __init__(self, vae_logdir, **kwargs):
         self._parse_init_args(vae_logdir, **kwargs)
+        
+        # Trigger IM logic in BaseLearner
+        if 'im_params' not in kwargs:
+            kwargs['im_params'] = {'nu': 1.0}
+            
+        # Clean up remaining training-specific keys
+        for k in ['dur', 'num_workers', 'log_dir', 'learning_rate', 'batch_size', 'horizon', 'mini_batch_size']:
+            kwargs.pop(k, None)
+            
         super().__init__(**kwargs)
+        
+        # Restore im reference to the vae
+        self.im = self.vae
 
     def _parse_init_args(self, vae_logdir, **kwargs):
         vae_logdir = str(vae_logdir)
@@ -117,6 +129,10 @@ class EDLLearner(BaseEDLLearner):
     def create_env(self):
         return Env(**self.env_params)
 
+    def _make_im_modules(self):
+        """Satisfy BaseLearner. Returns the VAE which acts as IM."""
+        return self.vae
+
     def _make_agent_modules(self):
         self.vae = VQVAEDiscriminator(state_size=self._dummy_env.state_size, **self.vae_args)
         self.vae.load_checkpoint(self.vae_checkpoint_path)
@@ -124,6 +140,35 @@ class EDLLearner(BaseEDLLearner):
                       goal_size=self.vae.code_size, normalize_inputs=self.normalize_inputs)
         self.policy = StochasticPolicy(**kwargs)
         self.v_module = Value(use_antigoal=False, **kwargs)
+        self.v_target = Value(use_antigoal=False, **kwargs)
+        self.v_target.load_state_dict(self.v_module.state_dict())
+        
+        from agents.maze_agents.modules.value_function import Critic
+        self.q1 = Critic(**kwargs)
+        self.q2 = Critic(**kwargs)
+
+    def get_curr_qs(self, batch, new_actions=None, q_i=1):
+        action = new_actions if new_actions is not None else batch['action']
+        q_module = self.q1 if q_i == 1 else self.q2
+        return q_module(batch['state'], action, self.preprocess_skill(batch['skill']))
+
+    def get_action_qs(self, batch, q_i=1):
+        return self.get_curr_qs(batch, q_i=q_i)
+
+    def get_policy_loss_and_actions(self, batch):
+        """Standard Actor loss for SAC."""
+        action, _, _, _ = self.policy(batch['state'], self.preprocess_skill(batch['skill']))
+        # Maximize Q1(s, pi(s))
+        q_val = self.q1(batch['state'], action, self.preprocess_skill(batch['skill']))
+        p_loss = -q_val.mean()
+        return p_loss, action
+
+    def get_next_vs(self, batch):
+        return self.v_target(batch['next_state'], self.preprocess_skill(batch['skill']))
+
+    def soft_update(self):
+        for target_param, param in zip(self.v_target.parameters(), self.v_module.parameters()):
+            target_param.data.copy_(target_param.data * self.polyak + param.data * (1.0 - self.polyak))
 
     def _make_agent(self):
         return DistanceStochasticAgent(env=self.create_env(), policy=self.policy, skill_n=self.vae.codebook_size,
@@ -148,6 +193,14 @@ class EDLLearner(BaseEDLLearner):
             action_logit=batch['action_logit']
         )
         return log_prob.sum(dim=1), n_ent
+
+    def sample_policy_actions_and_lprobs(self, batch):
+        """Sample new actions for SAC V-network updates."""
+        action, action_logit, lprobs, n_ent = self.policy(
+            batch['state'],
+            self.preprocess_skill(batch['skill'])
+        )
+        return action, lprobs.sum(dim=1)
 
 
 class EDLSiblingRivalryLearner(BaseEDLSiblingRivalryLearner, EDLLearner):

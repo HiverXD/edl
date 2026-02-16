@@ -85,15 +85,16 @@ def synchronous_worker(rank, config, settings):
     last_alpha = 1.0
 
     for epoch_idx in pbar:
-        # Each epoch consists of multiple cycles
-        for cycle_idx in range(config['cycles_per_epoch']):
+        # Each epoch consists of multiple cycles (Default to 1 for original EDL)
+        num_cycles = config.get('cycles_per_epoch', 1)
+        for cycle_idx in range(num_cycles):
             manager.do_cycle()
             
             # Optional: Update tqdm postfix inside cycles to show internal progress
             if rank == 0:
                 status = "Training" if manager.group_is_ready() else "Filling Buffer"
                 pbar.set_postfix({
-                    'Cyc': "{}/{}".format(cycle_idx + 1, config['cycles_per_epoch']),
+                    'Cyc': "{}/{}".format(cycle_idx + 1, num_cycles),
                     'Stat': status,
                     'Succ': "{:.2f}".format(last_succ),
                     'Step': int(manager.agent_model.train_steps.item())
