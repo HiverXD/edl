@@ -64,7 +64,12 @@ def train():
     
     agent = SACV2Learner(env=env, hidden_size=256, learning_rate=3e-4, gamma=0.99,
                          target_entropy=common.get('target_entropy', -2.0),
-                         skill_dim=provider.centroids_psi.shape[1])
+                         skill_dim=provider.centroids_psi.shape[1],
+                         skill_n=provider.n_skills)
+    
+    # Load actual centroids into the agent's embedding layer
+    agent.skill_embedding.weight.data.copy_(provider.centroids_psi)
+    
     buffer = ReplayBuffer(capacity=1000000)
     
     # 3. Path Standardization
@@ -105,7 +110,7 @@ def train():
     loss_stats = {}
     
     # 5. Training Loop
-    pbar = tqdm(total=total_steps, desc="Learning", ncols=120)
+    pbar = tqdm(total=total_steps, desc="Learning", ncols=80)
     if start_step > 1: pbar.update(start_step)
     
     try:
@@ -127,7 +132,9 @@ def train():
             state = next_state; ep_reward += reward; ep_steps += 1
             
             if step >= start_steps and len(buffer) >= 256:
-                loss_stats = agent.update(buffer.sample(256))
+                if step % 1000 == 0:
+                    for _ in range(1000):
+                        loss_stats = agent.update(buffer.sample(256))
             
             if step % 10000 == 0:
                 agent.save_checkpoint(model_path)
@@ -151,6 +158,13 @@ def train():
                 if len(history) % 100 == 0:
                     with open(stats_path, 'w') as f: json.dump(history, f, indent=4)
                 
+                # Reset Episode
+                skill_idx = np.random.randint(0, provider.n_skills)
+                current_goal_psi = provider.centroids_psi[skill_idx]
+                env.reset(goal=provider.get_goal_for_skill(skill_idx))
+                state = env.state; ep_reward = 0; ep_steps = 0; ep_breakdowns = []
+    
+            if step % 100 == 0:
                 # Update Tqdm Dashboard
                 avg_succ_rate = np.mean(success_window)
                 pbar.set_postfix({
@@ -159,13 +173,7 @@ def train():
                     'Q-L': "{:.3f}".format(epoch_data['q_loss']),
                     'Alpha': "{:.3f}".format(epoch_data['alpha'])
                 })
-                
-                # Reset Episode
-                skill_idx = np.random.randint(0, provider.n_skills)
-                current_goal_psi = provider.centroids_psi[skill_idx]
-                env.reset(goal=provider.get_goal_for_skill(skill_idx))
-                state = env.state; ep_reward = 0; ep_steps = 0; ep_breakdowns = []
-                
+    
     except KeyboardInterrupt:
         print("\nInterrupted.")
     finally:

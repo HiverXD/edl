@@ -39,20 +39,21 @@ class SPECTRAProvider(IntrinsicMotivationModule):
         calc_exp_id = os.path.join(exp_name, laplacian_stage) if exp_name == "curriculum" else exp_name
         self.calc = LaplacianMetricCalculator(maze_type=maze_type, exp_name=calc_exp_id)
         
-        # 2. Load Intent Centroids
+        # 2. Load Intent Centroids (Prioritize stored file for consistency)
         centroids_path = os.path.join("logs/spectral_kmeans", maze_type, exp_name, "intent_centroids.pkl")
-        if not os.path.exists(centroids_path):
-            raise FileNotFoundError("Centroids not found at {0}. Run visualization script first.".format(centroids_path))
-            
-        with open(centroids_path, 'rb') as f:
-            data = pickle.load(f)
-            
-        self.centroids_psi = torch.from_numpy(data['centroids_psi']).float()
-        self.centroids_s = data['centroids_s']
-        self.n_skills = data['n_clusters']
-        
-        print("SPECTRA Reward Provider initialized for {0} (Scale: {1}, Bonus: {2}).".format(
-            maze_type, self.reward_scale, self.sparse_bonus))
+        if os.path.exists(centroids_path):
+            with open(centroids_path, 'rb') as f:
+                data = pickle.load(f)
+            self.centroids_psi = torch.from_numpy(data['centroids_psi']).float()
+            self.centroids_s = data['centroids_s']
+            self.n_skills = data['n_clusters']
+            print("Loaded stored centroids from {0} for index consistency.".format(centroids_path))
+        else:
+            # Fallback or initialization (Only if specifically needed)
+            print("Warning: intent_centroids.pkl not found. Indices may be inconsistent!")
+            self.centroids_psi = torch.zeros((10, 10)) # Placeholder
+            self.centroids_s = np.zeros((10, 2))
+            self.n_skills = 10
 
     def get_goal_for_skill(self, skill_idx):
         if torch.is_tensor(skill_idx):
