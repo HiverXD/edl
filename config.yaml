@@ -35,7 +35,7 @@ rl:
     hidden_size: 256
     num_layers: 3
     polyak: 0.995
-    dur: 50
+    dur: 25
     num_workers: 1
     log_dir: "logs/rl"
     sparse_bonus: 2.0

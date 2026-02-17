@@ -12,18 +12,17 @@ import random
 import time
 from collections import deque
 from argparse import ArgumentParser
+from tqdm import tqdm
 
-from base.learners.new_sac import NewSAC
+from base.learners.sac_v2 import SACV2Learner
 from geometry_aware_skill_discovery.reward import SPECTRAProvider
 from agents.maze_agents.toy_maze.env.maze_env import Env
 
 class ReplayBuffer:
     def __init__(self, capacity):
         self.buffer = deque(maxlen=capacity)
-    
     def add(self, state, action, reward, next_state, done, skill):
         self.buffer.append((state, action, reward, next_state, done, skill))
-    
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
         state, action, reward, next_state, done, skill = zip(*batch)
@@ -37,7 +36,7 @@ class ReplayBuffer:
     def __len__(self): return len(self.buffer)
 
 def train():
-    parser = ArgumentParser()
+    parser = ArgumentParser(description="Official SPECTRA RL Training Script.")
     parser.add_argument("--config", type=str, default="config.yaml")
     parser.add_argument("--reward_type", type=str, default="static")
     parser.add_argument("--seed", type=int, default=42)
@@ -63,16 +62,19 @@ def train():
     }
     provider = SPECTRAProvider(maze_type=maze_type, exp_name=exp_name, **provider_kwargs)
     
-    agent = NewSAC(env=env, hidden_size=256, learning_rate=3e-4, gamma=0.99,
-                   target_entropy=common.get('target_entropy', -2.0),
-                   skill_dim=provider.centroids_psi.shape[1])
+    agent = SACV2Learner(env=env, hidden_size=256, learning_rate=3e-4, gamma=0.99,
+                         target_entropy=common.get('target_entropy', -2.0),
+                         skill_dim=provider.centroids_psi.shape[1])
     buffer = ReplayBuffer(capacity=1000000)
     
-    # 3. Resume Logic
-    log_dir = os.path.join("logs/new_sac", maze_type, args.reward_type)
+    # 3. Path Standardization
+    log_dir = os.path.join("logs/rl", maze_type, exp_name, args.reward_type)
     if not os.path.exists(log_dir): os.makedirs(log_dir)
     model_path = os.path.join(log_dir, "model.pth")
     stats_path = os.path.join(log_dir, "training_stats.json")
+    
+    with open(os.path.join(log_dir, "config.json"), "w") as f:
+        json.dump(config, f, indent=4)
     
     start_step = 1; history = []
     if os.path.exists(model_path):
@@ -87,8 +89,11 @@ def train():
 
     # 4. Training Loop
     num_epochs = common.get('dur', 1000)
-    total_steps = num_epochs * 1000
+    total_steps = num_epochs * 1000 
     start_steps = 5000 if start_step == 1 else 0 
+    
+    # Success tracking for tqdm
+    success_window = deque(maxlen=20)
     
     state = env.reset()
     skill_idx = np.random.randint(0, provider.n_skills)
@@ -97,10 +102,15 @@ def train():
     state = env.state
     
     ep_reward = 0; ep_steps = 0; ep_breakdowns = []
-    print("\n--- Starting New SAC Training (JSON Logging) ---")
+    loss_stats = {}
+    
+    # 5. Training Loop
+    pbar = tqdm(total=total_steps, desc="Learning", ncols=120)
+    if start_step > 1: pbar.update(start_step)
     
     try:
         for step in range(start_step, total_steps + 1):
+            pbar.update(1)
             if step < start_steps:
                 action = np.random.uniform(-env.action_range, env.action_range, size=(2,))
             else:
@@ -116,19 +126,18 @@ def train():
             buffer.add(state, action, reward, next_state, float(done), current_goal_psi)
             state = next_state; ep_reward += reward; ep_steps += 1
             
-            loss_stats = {}
             if step >= start_steps and len(buffer) >= 256:
-                batch = buffer.sample(256)
-                loss_stats = agent.update(batch)
+                loss_stats = agent.update(buffer.sample(256))
             
             if step % 10000 == 0:
                 agent.save_checkpoint(model_path)
-                print("\n--- Checkpoint Saved at Step {0} ---".format(step))
 
             if done or ep_steps >= 50:
+                success_window.append(int(success))
                 dist_to_g = env.dist(env.state, env.goal).item()
                 avg_breakdown = {k: np.mean([b[k] for b in ep_breakdowns]) for k in ep_breakdowns[0].keys()} if ep_breakdowns else {}
                 
+                # Log to history
                 epoch_data = {
                     'step': step, 'epoch': len(history) + 1, 'success': int(success), 'dist_to_goal': dist_to_g,
                     'avg_return': ep_reward, 'alpha': loss_stats.get('alpha', 1.0),
@@ -137,22 +146,32 @@ def train():
                     'rew_gauss': avg_breakdown.get('gauss', 0.0), 'rew_bon': avg_breakdown.get('bonus', 0.0)
                 }
                 history.append(epoch_data)
-                with open(stats_path, 'w') as f: json.dump(history, f, indent=4)
-
-                if step % 50 == 0 or success:
-                    print("Step {0:6d} | Rew: {1:6.2f} | Succ: {2} | Dist: {3:.2f} | Q-L: {4:.3f}".format(
-                        step, ep_reward, int(success), dist_to_g, epoch_data['q_loss']))
                 
+                # Periodically save JSON to disk (every 100 episodes)
+                if len(history) % 100 == 0:
+                    with open(stats_path, 'w') as f: json.dump(history, f, indent=4)
+                
+                # Update Tqdm Dashboard
+                avg_succ_rate = np.mean(success_window)
+                pbar.set_postfix({
+                    'Succ': "{:.2f}".format(avg_succ_rate),
+                    'Rew': "{:.1f}".format(ep_reward),
+                    'Q-L': "{:.3f}".format(epoch_data['q_loss']),
+                    'Alpha': "{:.3f}".format(epoch_data['alpha'])
+                })
+                
+                # Reset Episode
                 skill_idx = np.random.randint(0, provider.n_skills)
                 current_goal_psi = provider.centroids_psi[skill_idx]
                 env.reset(goal=provider.get_goal_for_skill(skill_idx))
                 state = env.state; ep_reward = 0; ep_steps = 0; ep_breakdowns = []
                 
     except KeyboardInterrupt:
-        print("\nTraining interrupted.")
+        print("\nInterrupted.")
     finally:
+        with open(stats_path, 'w') as f: json.dump(history, f, indent=4)
         agent.save_checkpoint(model_path)
-        print("Final model saved.")
+        print("Progress saved.")
 
 if __name__ == "__main__":
     train()
