@@ -107,10 +107,11 @@ def train():
     state = env.state
     
     ep_reward = 0; ep_steps = 0; ep_breakdowns = []
-    loss_stats = {}
+    loss_stats = {'q1_loss': 0.0, 'p_loss': 0.0, 'alpha': 1.0}
+    epoch_data = {'q_loss': 0.0, 'alpha': 1.0} # Safety for resume
     
     # 5. Training Loop
-    pbar = tqdm(total=total_steps, desc="Learning", ncols=80)
+    pbar = tqdm(total=total_steps, desc="Learning", ncols=120)
     if start_step > 1: pbar.update(start_step)
     
     try:
@@ -131,10 +132,11 @@ def train():
             buffer.add(state, action, reward, next_state, float(done), current_goal_psi)
             state = next_state; ep_reward += reward; ep_steps += 1
             
+            # E. Update (Standard Off-policy: 1 update per 1 step)
             if step >= start_steps and len(buffer) >= 256:
-                if step % 1000 == 0:
-                    for _ in range(1000):
-                        loss_stats = agent.update(buffer.sample(256))
+                # To maintain the same 'training intensity' as the epoch-based version,
+                # we perform 1 update every step.
+                loss_stats = agent.update(buffer.sample(256))
             
             if step % 10000 == 0:
                 agent.save_checkpoint(model_path)
@@ -166,12 +168,12 @@ def train():
     
             if step % 100 == 0:
                 # Update Tqdm Dashboard
-                avg_succ_rate = np.mean(success_window)
+                avg_succ_rate = np.mean(success_window) if success_window else 0.0
                 pbar.set_postfix({
                     'Succ': "{:.2f}".format(avg_succ_rate),
                     'Rew': "{:.1f}".format(ep_reward),
-                    'Q-L': "{:.3f}".format(epoch_data['q_loss']),
-                    'Alpha': "{:.3f}".format(epoch_data['alpha'])
+                    'Q-L': "{:.3f}".format(loss_stats.get('q1_loss', 0.0)),
+                    'Alpha': "{:.3f}".format(loss_stats.get('alpha', 1.0))
                 })
     
     except KeyboardInterrupt:
