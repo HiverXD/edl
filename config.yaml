@@ -1,41 +1,19 @@
 # Curriculum Training Configuration for SPECTRA
 experiment:
-  maze_type: "square_large"
+  maze_type: "square_corridor"
   exp_name: "curriculum"
   dim: 10
   hidden_dim: 256
 
-stages:
-  - id: 1
-    name: "coarse_skeleton"
-    generation: {grid_size: 0.5, get_skeleton: true, use_random_walk: true, num_episodes: 400}
-    training: {epochs: 300, lr: 0.001, resume: false}
-  - id: 2
-    name: "fine_grid"
-    generation: {grid_size: 0.25, get_skeleton: false, use_random_walk: true, num_episodes: 800}
-    training: {additional_epochs: 200, lr: 0.001, resume: true}
-
-vqvae:
-  mode: "identity"
-  num_samples: 50000 
-  log_dir: "logs/vqvae"
-  hidden_size: 128
-  codebook_size: 10 
-  code_size: 16     
-  learning_rate: 0.001
-  batch_size: 1024
-  epochs: 5000
-  normalize_inputs: true
-
 rl:
   common:
     gamma: 0.99
-    learning_rate: 0.0001
+    learning_rate: 0.0003
     batch_size: 256
     hidden_size: 256
     num_layers: 3
     polyak: 0.995
-    dur: 35
+    dur: 30
     num_workers: 1
     log_dir: "logs/rl"
     sparse_bonus: 2.0
@@ -43,6 +21,7 @@ rl:
     gaussian_bonus: 0.0
     gaussian_std: 0.5
     target_entropy: -1.0
+    huber_delta: 1.0        # Lipschitz constraint threshold
     
     logging_keys:
       - "success"
@@ -70,4 +49,13 @@ rl:
   dynamic:
     reward_scale: 1.0      
     time_penalty: 0.05     
+    pbrs_gamma: 0.99
+
+  static_huber:
+    reward_scale: 0.1
+    time_penalty: 0.005
+
+  dynamic_huber:
+    reward_scale: 1.0
+    time_penalty: 0.05
     pbrs_gamma: 0.99

@@ -39,12 +39,10 @@ def analyze_scales():
     env = Env(n=1, maze_type=maze_type, use_antigoal=False)
     states = torch.stack([torch.tensor(env.sample()) for _ in range(args.num_samples)]).float()
     
-    print("
-=== SPECTRA Reward Scale Analysis: {0} ===".format(maze_type))
+    print("=== SPECTRA Reward Scale Analysis: {0} ===".format(maze_type))
     
     for k in range(min(3, provider.n_skills)): # Check first few skills
-        print("
---- Analyzing Skill {0} ---".format(k))
+        print("--- Analyzing Skill {0} ---".format(k))
         skill_idx = torch.full((args.num_samples,), k, dtype=torch.long)
         
         # Calculate unscaled potentials (assuming reward_scale=1.0 for base measurement)
@@ -87,8 +85,7 @@ def analyze_scales():
         
         # 6. Suggested Scale Recommendation
         # We want avg_delta * scale > time_penalty AND time_penalty > passive_gain * scale
-        print("
-[Recommendations based on Penalty settings]")
+        print("[Recommendations based on Penalty settings]")
         for test_penalty in [0.01, 0.05, 0.1]:
             # Scale must be small enough so that: passive_gain * scale < test_penalty
             # Scale must be large enough so that: avg_delta * scale > test_penalty

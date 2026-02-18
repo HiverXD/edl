@@ -111,7 +111,7 @@ def train():
     epoch_data = {'q_loss': 0.0, 'alpha': 1.0} # Safety for resume
     
     # 5. Training Loop
-    pbar = tqdm(total=total_steps, desc="Learning", ncols=120)
+    pbar = tqdm(total=total_steps, desc="Learning", ncols=90)
     if start_step > 1: pbar.update(start_step)
     
     try:

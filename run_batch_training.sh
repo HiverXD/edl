@@ -7,7 +7,7 @@
 ALL_MAZES=$(ls -d logs/laplacian_encoder/*/ | xargs -n 1 basename)
 
 # Mazes to exclude
-EXCLUDE=("square_corridor" "square_a")
+EXCLUDE=("nothing")
 
 echo "--- Starting SPECTRA Batch Training ---"
 
@@ -38,12 +38,12 @@ for MAZE in $ALL_MAZES; do
     
     # Use sed to update maze_type in the temp config
     # Matches maze_type: "any_value" and replaces with maze_type: "MAZE"
-    sed -i "s/maze_type: ".*"/maze_type: "$MAZE"/" $TMP_CONFIG
+    sed -i "s/maze_type: \".*\"/maze_type: \"$MAZE\"/" $TMP_CONFIG
     
     echo "[Config] Created $TMP_CONFIG with maze_type: $MAZE"
     
     # 2. Run Training
-    python train_gasd_sac.py --config $TMP_CONFIG --reward_type static
+    python train_gasd_sac.py --config $TMP_CONFIG --reward_type static_huber
     
     if [ $? -eq 0 ]; then
         echo "[Success] Finished training for $MAZE"

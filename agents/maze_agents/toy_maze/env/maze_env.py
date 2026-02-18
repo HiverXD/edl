@@ -5,6 +5,7 @@
 
 import torch
 import numpy as np
+from gym.utils import seeding
 from agents.maze_agents.toy_maze.env.mazes import mazes_dict, make_crazy_maze, make_experiment_maze, make_hallway_maze, make_u_maze
 
 
@@ -52,7 +53,12 @@ class Env:
 
         self.dist_threshold = 0.15
 
+        self.seed()
         self.reset()
+
+    def seed(self, seed=None):
+        self.np_random, seed = seeding.np_random(seed)
+        return [seed]
 
     @property
     def state_size(self):
