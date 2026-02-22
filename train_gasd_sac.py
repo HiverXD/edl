@@ -73,7 +73,7 @@ def train():
     buffer = ReplayBuffer(capacity=1000000)
     
     # 3. Path Standardization
-    log_dir = os.path.join("logs/rl", maze_type, exp_name, args.reward_type)
+    log_dir = os.path.join("logs/rl", maze_type, exp_name, args.reward_type, str(args.seed))
     if not os.path.exists(log_dir): os.makedirs(log_dir)
     model_path = os.path.join(log_dir, "model.pth")
     stats_path = os.path.join(log_dir, "training_stats.json")
@@ -97,6 +97,9 @@ def train():
     total_steps = num_epochs * 1000 
     start_steps = 5000 if start_step == 1 else 0 
     
+    # [FIX] Get reward gamma from config (crucial for PBRS)
+    rew_gamma = config['rl'][args.reward_type].get('pbrs_gamma', 0.99)
+    
     # Success tracking for tqdm
     success_window = deque(maxlen=20)
     
@@ -108,7 +111,8 @@ def train():
     
     ep_reward = 0; ep_steps = 0; ep_breakdowns = []
     loss_stats = {'q1_loss': 0.0, 'p_loss': 0.0, 'alpha': 1.0}
-    epoch_data = {'q_loss': 0.0, 'alpha': 1.0} # Safety for resume
+    epoch_data = {'q_loss': 0.0, 'alpha': 1.0} 
+    success_streak = 0 # Local variable for early stopping
     
     # 5. Training Loop
     pbar = tqdm(total=total_steps, desc="Learning", ncols=90)
@@ -126,7 +130,7 @@ def train():
             
             def _to_t(x): return x if torch.is_tensor(x) else torch.from_numpy(x).float()
             s_t, ns_t = _to_t(state).unsqueeze(0), _to_t(next_state).unsqueeze(0)
-            reward = provider.compute_reward(s_t, ns_t, torch.tensor([skill_idx]), gamma=0.99, reward_type=args.reward_type).item()
+            reward = provider.compute_reward(s_t, ns_t, torch.tensor([skill_idx]), gamma=rew_gamma, reward_type=args.reward_type).item()
             ep_breakdowns.append(provider._last_breakdown.copy())
             
             buffer.add(state, action, reward, next_state, float(done), current_goal_psi)
@@ -143,6 +147,24 @@ def train():
 
             if done or ep_steps >= 50:
                 success_window.append(int(success))
+                avg_succ_rate = np.mean(success_window) if success_window else 0.0
+                
+                # --- [NEW] Early Stopping Logic ---
+                # 1. Success-based Early Exit: 1.0 success maintained
+                if avg_succ_rate >= 1.0:
+                    success_streak += ep_steps
+                    if success_streak >= 500: # Maintain 1.0 for 500 steps
+                        pbar.write(">>> Goal maintained! Early termination at step {0}".format(step))
+                        raise StopIteration # Use custom exception to trigger final save
+                else:
+                    success_streak = 0
+                
+                # 2. Failure-based Pruning: Below 20% at 30% of time
+                if step > (total_steps * 0.3) and avg_succ_rate < 0.2:
+                    pbar.write(">>> Pruning: Low success ({0:.2f}) at 30% mark.".format(avg_succ_rate))
+                    raise StopIteration
+                # ---------------------------------
+
                 dist_to_g = env.dist(env.state, env.goal).item()
                 avg_breakdown = {k: np.mean([b[k] for b in ep_breakdowns]) for k in ep_breakdowns[0].keys()} if ep_breakdowns else {}
                 
@@ -177,7 +199,9 @@ def train():
                 })
     
     except KeyboardInterrupt:
-        print("\nInterrupted.")
+        print("\nTraining interrupted.")
+    except StopIteration:
+        print("\nTraining terminated early.")
     finally:
         with open(stats_path, 'w') as f: json.dump(history, f, indent=4)
         agent.save_checkpoint(model_path)
