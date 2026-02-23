@@ -159,8 +159,8 @@ def train():
                 else:
                     success_streak = 0
                 
-                # 2. Failure-based Pruning: Below 15% at 40% of time
-                if step > (total_steps * 0.4) and avg_succ_rate < 0.15:
+                # 2. Failure-based Pruning: Below 10% at 40% of time
+                if step > (total_steps * 0.4) and avg_succ_rate < 0.10:
                     pbar.write(">>> Pruning: Low success ({0:.2f}) at 40% mark.".format(avg_succ_rate))
                     raise StopIteration
                 # ---------------------------------

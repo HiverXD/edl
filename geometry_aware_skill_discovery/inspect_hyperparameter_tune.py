@@ -50,9 +50,35 @@ def inspect_tuning():
         results = []
         for _, row in completed.iterrows():
             trial_num = int(row['number'])
-            
+            score = row['value']
+            if score is None or score <= 0.0: continue # Filter out garbage trials
+
+            # Dynamic Parameter Resolution (Legacy vs V4)
+            # 1. Grids from tune_peak_performance.py
+            ent_grid = [round(x, 2) for x in np.linspace(-2.0, 0.0, 11).tolist()]
+            if "huber" in study_name:
+                sc_grid = [round(x, 2) for x in np.linspace(0.5, 4.0, 15).tolist()] if "static" in study_name else [round(x, 2) for x in np.linspace(1.0, 8.0, 15).tolist()]
+                pn_grid = [round(x, 4) for x in np.linspace(0.0005, 0.02, 15).tolist()] if "static" in study_name else [round(x, 3) for x in np.linspace(0.01, 0.15, 15).tolist()]
+            else:
+                sc_grid = [round(x, 3) for x in np.linspace(0.05, 1.0, 15).tolist()] if "static" in study_name else [round(x, 2) for x in np.linspace(1.0, 8.0, 15).tolist()]
+                pn_grid = [round(x, 4) for x in np.linspace(0.0005, 0.02, 15).tolist()] if "static" in study_name else [round(x, 3) for x in np.linspace(0.01, 0.15, 15).tolist()]
+
+            # 2. Extract Values
+            def get_val(legacy_key, idx_key, grid):
+                if 'params_' + legacy_key in row and not pd.isnull(row['params_' + legacy_key]):
+                    return row['params_' + legacy_key]
+                if 'params_' + idx_key in row and not pd.isnull(row['params_' + idx_key]):
+                    return grid[int(row['params_' + idx_key])]
+                return 0.0
+
+            scale = get_val('reward_scale', 'sc_idx', sc_grid)
+            penalty = get_val('time_penalty', 'pen_idx', pn_grid)
+            entropy = get_val('target_entropy', 'ent_idx', ent_grid)
+
             # Derive reward type for path
             r_type = study_name.split(args.maze + "_")[-1]
+            if "peak_v4" in study_name: # Handle study name variants
+                r_type = study_name.split("peak_v4_" + args.maze + "_")[-1]
             
             seed = 42 + trial_num
             stats_path = os.path.join("logs/rl", args.maze, "curriculum", r_type, str(seed), "training_stats.json")
