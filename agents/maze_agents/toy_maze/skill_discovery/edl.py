@@ -18,7 +18,7 @@ from base.learners.skill_discovery.edl import BaseEDLLearner, BaseEDLSiblingRiva
 class DistanceStochasticAgent(StochasticAgent):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self.batch_keys += ['goal']  # 'goal' is only used for visualization purposes
+        self.batch_keys += ['goal']
 
     def _make_modules(self, policy, skill_embedding, vae):
         super()._make_modules(policy, skill_embedding)
@@ -30,13 +30,9 @@ class DistanceStochasticAgent(StochasticAgent):
 
     def reset(self, skill=None, *args, **kwargs):
         self.reset_skill(skill)
-        # If the skill is a continuous vector (interpolated), pass it directly to the decoder.
-        # Otherwise, treat it as a discrete skill index.
         if self.curr_skill.dim() > 0 and self.curr_skill.numel() > 1:
-            # It's an interpolated vector, feed it directly to the decoder
             goal_state = self.vae.decoder(self.curr_skill.unsqueeze(0)).squeeze(0).detach().numpy()
         else:
-            # It's a scalar index, use the existing logic
             goal_state = self.vae.get_centroids(dict(skill=self.curr_skill.view([]))).detach().numpy()
         kwargs['goal'] = goal_state
         self.env.reset(*args, **kwargs)
@@ -55,8 +51,21 @@ class SiblingRivalryStochasticAgent(DistanceStochasticAgent):
 
 class VQVAEDiscriminator(VQVAEDensity):
     def __init__(self, state_size, hidden_size, codebook_size, code_size, beta=0.25, **kwargs):
+        # 1. Extract EMA parameters and remove them from kwargs to avoid parent TypeError
+        # Ensure they are floats to avoid string multiplication bugs in legacy YAML parsers
+        self.use_ema = "decay" in kwargs
+        decay = float(kwargs.pop("decay", 0.99))
+        epsilon = float(kwargs.pop("epsilon", 1e-5))
+        
         super().__init__(num_skills=0, state_size=state_size, hidden_size=hidden_size, codebook_size=codebook_size,
                          code_size=code_size, beta=beta, **kwargs)
+        
+        # 2. Override standard VQ if EMA requested
+        if self.use_ema:
+            from base.modules.vector_quantization.embeddings import AdvancedVQEmbedding
+            self.vq = AdvancedVQEmbedding(codebook_size, code_size, beta, 
+                                          decay=decay, 
+                                          epsilon=epsilon)
         self.softmax = nn.Softmax(dim=1)
 
     def _make_normalizer_module(self):
@@ -65,24 +74,37 @@ class VQVAEDiscriminator(VQVAEDensity):
     def compute_logprob(self, batch, with_codes=False):
         x = batch[self.input_key]
         z_e_x = self.encoder(x)
-        z_q_x, selected_codes = self.vq.straight_through(z_e_x)
+        
+        if self.use_ema:
+            # Advanced VQ handles quantization and returns (z_q, selected_codes, loss)
+            z_q_x, selected_codes, vq_loss = self.vq(z_e_x)
+        else:
+            z_q_x, selected_codes = self.vq.straight_through(z_e_x)
+            vq_loss = self.vq(z_e_x, selected_codes)
+            
         x_ = self.decoder(z_q_x)
         if self.normalizes_inputs:
             x_ = self.normalizer.denormalize(x_)
-        logprob = -1. * self.mse_loss(x, x_).sum(dim=1)
+            
+        recon_logprob = -1. * self.mse_loss(x, x_).sum(dim=1)
+        
         if with_codes:
-            return logprob, z_e_x, selected_codes
+            return recon_logprob, z_e_x, selected_codes, vq_loss
         else:
-            return logprob
+            return recon_logprob
+
+    def forward(self, batch):
+        # Override parent forward to integrate Advanced VQ loss correctly
+        recon_logprob, z_e_x, selected_codes, vq_loss = self.compute_logprob(batch, with_codes=True)
+        # Total loss = MSE(x, x') + VQ_loss
+        return (vq_loss - recon_logprob).mean()
 
     def compute_logprob_under_latent(self, batch, z=None):
         x = batch[self.input_key]
-        if z is None:
-            z = batch['skill']
+        if z is None: z = batch['skill']
         z_q_x = self.vq.embedding(z).detach()
         x_ = self.decoder(z_q_x).detach()
-        if self.normalizes_inputs:
-            x_ = self.normalizer.denormalize(x_)
+        if self.normalizes_inputs: x_ = self.normalizer.denormalize(x_)
         logprob = -1. * self.mse_loss(x, x_).sum(dim=1)
         return logprob
 
@@ -100,38 +122,25 @@ class VQVAEDiscriminator(VQVAEDensity):
 
 
 class EDLLearner(BaseEDLLearner):
-
     def __init__(self, vae_logdir, **kwargs):
         self._parse_init_args(vae_logdir, **kwargs)
-        
-        # Trigger IM logic in BaseLearner
-        if 'im_params' not in kwargs:
-            kwargs['im_params'] = {'nu': 1.0}
-            
-        # Clean up remaining training-specific keys
+        if 'im_params' not in kwargs: kwargs['im_params'] = {'nu': 1.0}
         for k in ['dur', 'num_workers', 'log_dir', 'learning_rate', 'batch_size', 'horizon', 'mini_batch_size']:
             kwargs.pop(k, None)
-            
         super().__init__(**kwargs)
-        
-        # Restore im reference to the vae
         self.im = self.vae
 
     def _parse_init_args(self, vae_logdir, **kwargs):
         vae_logdir = str(vae_logdir)
         if not os.path.isabs(vae_logdir):
-            root_dir = os.environ.get("ROOT_DIR", os.getcwd())  # useful when loading experiments from a notebook
+            root_dir = os.environ.get("ROOT_DIR", os.getcwd())
             vae_logdir = os.path.join(root_dir, vae_logdir)
         assert os.path.exists(vae_logdir), "Directory not found: {}".format(vae_logdir)
         self.vae_args = json.load(open(os.path.join(vae_logdir, "config.json")))["vae_args"]
         self.vae_checkpoint_path = os.path.join(vae_logdir, "model.pth.tar")
 
-    def create_env(self):
-        return Env(**self.env_params)
-
-    def _make_im_modules(self):
-        """Satisfy BaseLearner. Returns the VAE which acts as IM."""
-        return self.vae
+    def create_env(self): return Env(**self.env_params)
+    def _make_im_modules(self): return self.vae
 
     def _make_agent_modules(self):
         self.vae = VQVAEDiscriminator(state_size=self._dummy_env.state_size, **self.vae_args)
@@ -142,29 +151,22 @@ class EDLLearner(BaseEDLLearner):
         self.v_module = Value(use_antigoal=False, **kwargs)
         self.v_target = Value(use_antigoal=False, **kwargs)
         self.v_target.load_state_dict(self.v_module.state_dict())
-        
         from agents.maze_agents.modules.value_function import Critic
-        self.q1 = Critic(**kwargs)
-        self.q2 = Critic(**kwargs)
+        self.q1, self.q2 = Critic(**kwargs), Critic(**kwargs)
 
     def get_curr_qs(self, batch, new_actions=None, q_i=1):
         action = new_actions if new_actions is not None else batch['action']
         q_module = self.q1 if q_i == 1 else self.q2
         return q_module(batch['state'], action, self.preprocess_skill(batch['skill']))
 
-    def get_action_qs(self, batch, q_i=1):
-        return self.get_curr_qs(batch, q_i=q_i)
+    def get_action_qs(self, batch, q_i=1): return self.get_curr_qs(batch, q_i=q_i)
 
     def get_policy_loss_and_actions(self, batch):
-        """Standard Actor loss for SAC."""
         action, _, _, _ = self.policy(batch['state'], self.preprocess_skill(batch['skill']))
-        # Maximize Q1(s, pi(s))
         q_val = self.q1(batch['state'], action, self.preprocess_skill(batch['skill']))
-        p_loss = -q_val.mean()
-        return p_loss, action
+        return -q_val.mean(), action
 
-    def get_next_vs(self, batch):
-        return self.v_target(batch['next_state'], self.preprocess_skill(batch['skill']))
+    def get_next_vs(self, batch): return self.v_target(batch['next_state'], self.preprocess_skill(batch['skill']))
 
     def soft_update(self):
         for target_param, param in zip(self.v_target.parameters(), self.v_module.parameters()):
@@ -174,32 +176,15 @@ class EDLLearner(BaseEDLLearner):
         return DistanceStochasticAgent(env=self.create_env(), policy=self.policy, skill_n=self.vae.codebook_size,
                                        skill_embedding=self.vae.vq.embedding, vae=self.vae)
 
-    def get_values(self, batch):
-        return self.v_module(
-            batch['state'],
-            self.preprocess_skill(batch['skill'])
-        )
-
-    def get_terminal_values(self, batch):
-        return self.v_module(
-            batch['next_state'][-1:],
-            self.preprocess_skill(batch['skill'][-1:]),
-        )
+    def get_values(self, batch): return self.v_module(batch['state'], self.preprocess_skill(batch['skill']))
+    def get_terminal_values(self, batch): return self.v_module(batch['next_state'][-1:], self.preprocess_skill(batch['skill'][-1:]))
 
     def get_policy_lprobs_and_nents(self, batch):
-        log_prob, n_ent, _ = self.policy(
-            batch['state'],
-            self.preprocess_skill(batch['skill']),
-            action_logit=batch['action_logit']
-        )
+        log_prob, n_ent, _ = self.policy(batch['state'], self.preprocess_skill(batch['skill']), action_logit=batch['action_logit'])
         return log_prob.sum(dim=1), n_ent
 
     def sample_policy_actions_and_lprobs(self, batch):
-        """Sample new actions for SAC V-network updates."""
-        action, action_logit, lprobs, n_ent = self.policy(
-            batch['state'],
-            self.preprocess_skill(batch['skill'])
-        )
+        action, action_logit, lprobs, n_ent = self.policy(batch['state'], self.preprocess_skill(batch['skill']))
         return action, lprobs.sum(dim=1)
 
 
@@ -221,20 +206,8 @@ class EDLSiblingRivalryLearner(BaseEDLSiblingRivalryLearner, EDLLearner):
                                              skill_embedding=self.vae.vq.embedding, vae=self.vae)
 
     def get_values(self, batch):
-        return self.v_module(
-            batch['state'],
-            self.preprocess_skill(batch['skill']),
-            batch.get('antigoal', None)
-        )
+        return self.v_module(batch['state'], self.preprocess_skill(batch['skill']), batch.get('antigoal', None))
 
     def get_terminal_values(self, batch):
-        if 'antigoal' in batch:
-            antigoal = batch['antigoal'][-1:]
-        else:
-            antigoal = None
-        return self.v_module(
-            batch['next_state'][-1:],
-            self.preprocess_skill(batch['skill'][-1:]),
-            antigoal
-        )
-
+        antigoal = batch['antigoal'][-1:] if 'antigoal' in batch else None
+        return self.v_module(batch['next_state'][-1:], self.preprocess_skill(batch['skill'][-1:]), antigoal)

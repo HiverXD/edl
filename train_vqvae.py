@@ -53,7 +53,13 @@ def open_experiment():
     parser.add_argument('--config-path', type=str, help='Path to experiment config file (.json or .yaml)')
     parser.add_argument('--log-dir', type=str, help='Parent directory that holds experiment log directories')
     parser.add_argument('--dur', type=int, default=0, help='Number of training iterations (overrides config if > 0)')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--mode', type=str, help='Override vqvae mode (identity or spectral)')
     args = parser.parse_args()
+
+    # Set seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     config_path = args.config_path
     assert os.path.isfile(config_path)
@@ -66,11 +72,11 @@ def open_experiment():
         # Standardize YAML to match VQ-VAE training expectations
         maze_type = config['experiment']['maze_type']
         exp_name = config['experiment']['exp_name']
-        mode = config['vqvae']['mode']
+        mode = args.mode or config['vqvae']['mode']
         
-        # Output directory: logs/vqvae/{maze_type}/{exp_name}/{mode}/
-        log_root = args.log_dir or config['vqvae'].get('log_dir', "logs/vqvae")
-        exp_dir = os.path.join(log_root, maze_type, exp_name, mode)
+        # Output directory: logs/edl/vqvae/{maze_type}/{exp_name}/{mode}/{seed}/
+        log_root = args.log_dir or config['vqvae'].get('log_dir', "logs/edl/vqvae")
+        exp_dir = os.path.join(log_root, maze_type, exp_name, mode, str(args.seed))
         
         # Load GASD dataset
         dataset = load_gasd_dataset(config)
